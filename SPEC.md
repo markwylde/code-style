@@ -1,0 +1,2022 @@
+# NodeJS Code Guide
+
+## Overview
+
+This guide describes how to build a functional, minimal dependency Node.js project using the context pattern. The context pattern provides dependency injection without frameworks, making testing easy and keeping the codebase simple.
+
+## Project Structure
+
+```markdown
+project/
+├── packages/
+│   ├── api/
+│   │   ├── src/
+│   │   │   ├── main.ts
+│   │   │   ├── createServer.ts
+│   │   │   ├── createContext.ts
+│   │   │   ├── types.ts
+│   │   │   ├── errors.ts
+│   │   │   ├── db/
+│   │   │   │   ├── schema.ts
+│   │   │   │   └── migrate.ts
+│   │   │   ├── schemas/
+│   │   │   │   ├── users.ts
+│   │   │   │   └── posts.ts
+│   │   │   ├── utils/
+│   │   │   │   └── http.ts
+│   │   │   ├── models/
+│   │   │   │   ├── users.ts
+│   │   │   │   └── posts.ts
+│   │   │   ├── services/
+│   │   │   │   ├── auth.ts
+│   │   │   │   └── email.ts
+│   │   │   └── controllers/
+│   │   │       ├── users/
+│   │   │       │   ├── get.ts
+│   │   │       │   ├── post.ts
+│   │   │       │   └── [id]/
+│   │   │       │       ├── get.ts
+│   │   │       │       └── post.ts
+│   │   │       └── posts/
+│   │   │           ├── get.ts
+│   │   │           ├── post.ts
+│   │   │           └── [id]/
+│   │   │               ├── get.ts
+│   │   │               └── post.ts
+│   │   ├── tests/
+│   │   │   ├── helpers/
+│   │   │   │   └── createTestServer.ts
+│   │   │   ├── models/
+│   │   │   │   └── users.test.ts
+│   │   │   └── controllers/
+│   │   │       └── users/
+│   │   │           ├── get.test.ts
+│   │   │           ├── post.test.ts
+│   │   │           └── [id]/
+│   │   │               ├── get.test.ts
+│   │   │               └── post.test.ts
+│   │   ├── drizzle/
+│   │   │   └── migrations/
+│   │   ├── drizzle.config.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   ├── ui/
+│   │   ├── src/
+│   │   ├── index.html
+│   │   ├── vite.config.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   └── admin-ui/
+│       ├── src/
+│       ├── index.html
+│       ├── vite.config.ts
+│       ├── package.json
+│       └── tsconfig.json
+├── package.json
+└── tsconfig.json
+```
+
+## Core Concepts
+
+- Use the context pattern instead of complex dependency injection frameworks.
+- Comments should be rarely be needed as code should be written to be self-documenting.
+- Comments should be used to explain why a unintuitive code block or hack is needed, not what it does.
+- Never abbreviate anything, variables, functions, etc.
+- Prefer built in Node functionality over third party libraries.
+- Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
+ - UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
+- Use npm workspaces to manage the monorepo structure with separate packages for api, ui, and admin-ui.
+
+### Server Lifecycle And Portability
+
+- Projects may run one or many HTTP servers. Treat all HTTP servers uniformly: each server must be portable, restartable, and stoppable.
+- Tests and production must use the same server factory and lifecycle API.
+- Do not rely on globals for server state. All resources live in context and are created/destroyed via explicit lifecycle calls.
+
+Lifecycle API (conceptual):
+- createServer(context) returns an object exposing: start(), stop(), restart(), getContext(), and references to all running HTTP servers.
+- start() resolves only when all HTTP servers are bound on their configured ports and report healthy via a readiness endpoint.
+- stop() resolves only when all HTTP servers are closed, open sockets destroyed, timers cleared, and resources released. No leaks.
+- restart() = stop old servers and context, build a brand‑new context, build brand‑new servers on the same ports, then start and wait for readiness. Never reuse the old context.
+- Ports per server are defined in config and must remain stable across restarts. Avoid hard‑coded port numbers.
+
+Readiness and health:
+- Every HTTP server exposes a lightweight health endpoint for readiness checks used by start/restart and tests.
+- Callers should not insert arbitrary sleeps; lifecycle methods guarantee readiness before resolving.
+
+### Controllers And Models
+
+- Controllers live in files following `controllers/{entity}/{optionalSegment}/{method}.ts`, for example `controllers/users/[id]/get.ts`.
+- Controllers are thin HTTP adapters. They parse input, enforce authentication and authorization, call models and services, and shape HTTP responses. They contain no database logic.
+- HTTP routing uses `URLPattern` objects instead of manual string matching. Each route declares a method and a `URLPattern` for the pathname, and handlers receive parsed parameters from the pattern match.
+- Models encapsulate domain and data logic. They validate inputs relevant to the domain, perform all database access, apply invariants, and return plain data objects. They contain no HTTP concerns.
+- Controllers register OpenAPI via zod schemas and map domain data from models to the response. OpenAPI types describe the external shape; model types describe the internal domain.
+- Types used by models are defined with zod and inferred types near the model functions, or shared in `schemas/` when reused by multiple callers. Controllers import those types to validate I/O, but do not redefine domain types.
+- Permissions and cohort checks exist only in controllers (or dedicated auth middleware). Models should assume the caller is authorized.
+- Services handle external protocols or multi-step processes (e.g. email or payments). Prefer orchestrating services from controllers (or dedicated service/orchestrator functions). Models should not trigger cross-boundary side effects (email, queues, third-party APIs). If a workflow requires side effects alongside data changes, expose a service like `registerUser` that composes model calls and invokes side effects explicitly.
+
+Rules:
+- No direct `context.db` usage in controllers. All reads and writes go through a model or service.
+- Controllers may compose multiple model calls but never reach into tables.
+- Models return simple data that the controller can send directly or transform for HTTP.
+- When adding a feature, start by defining model functions, then wire a controller that validates input, authorizes, calls the model, and documents via OpenAPI.
+
+#### Model Responsibilities
+
+Models own all data access and business rules. They are the single source of truth for how data is retrieved, created, updated, and deleted.
+
+Models should:
+- Contain all database queries and operations
+- Handle data validation and business logic
+- Implement data transformation and aggregation
+- Manage relationships between entities
+- Provide clean, typed interfaces for data access
+- Handle pagination, filtering, and search logic
+- Throw appropriate errors (`NotFoundError`, `ConflictError`, `ValidationError`, etc.)
+- Be pure functions that take `Context` as the first parameter
+
+Models should NOT:
+- Handle HTTP requests/responses
+- Manage authentication/authorization
+- Deal with OpenAPI specifications
+- Parse query parameters or request bodies
+ - Trigger external side effects (email, queues, third‑party APIs)
+
+#### Controller Responsibilities
+
+Controllers are thin HTTP layers that coordinate between the transport (HTTP), authentication, and models.
+
+Controllers should:
+- Handle HTTP request/response lifecycle
+- Parse and validate query parameters and request bodies
+- Manage authentication and authorization (via session middleware)
+- Call appropriate model functions with validated data
+- Handle OpenAPI specification registration
+- Transform model responses for HTTP responses
+- Let error handling bubble to the top-level middleware
+
+Controllers should NOT:
+- Contain database queries or business logic
+- Handle complex data transformations
+- Implement pagination or filtering logic
+- Manage database transactions directly
+
+#### Model–Controller Relationship
+
+Pattern:
+
+```typescript
+// Controller (HTTP layer)
+export async function getUsersController(context: Context, request: IncomingMessage, response: ServerResponse) {
+  const sessionData = await requireSession(context, request, true);
+  if (!sessionData.adminRole) throw new ForbiddenError("Admin access required");
+
+  const url = new URL(request.url || "", `http://${request.headers.host}`);
+  const { page, limit } = getPaginationFromUrl(url, 20, 100);
+  const search = url.searchParams.get("search");
+
+  const result = await listUsers(context, { page, limit, search: search || undefined });
+  sendJsonValidated(response, 200, result, UsersListResponseSchema);
+}
+
+// Model (Data layer)
+export async function listUsers(
+  context: Context,
+  options: { page?: number; limit?: number; search?: string } = {}
+) {
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(100, Math.max(1, options.limit || 20));
+  const offset = (page - 1) * limit;
+  // Complex queries, joins, aggregations
+  const users = await context.db.select(/* ... */).from(/* ... */).limit(limit).offset(offset);
+  return { users, pagination: { /* ... */ } };
+}
+```
+
+#### Type Safety Between Layers
+
+Use zod schemas for external API types, and clean TypeScript types for model results.
+
+```typescript
+// schemas/users.ts – external API types
+export const UserSchema = z.object({
+  sub: z.string(),
+  email: z.string().email().nullable(),
+  name: z.string().nullable(),
+  createdAt: z.date(),
+});
+export type User = z.infer<typeof UserSchema>;
+
+// models/users.ts – database operations with types
+export async function listUsers(context: Context, options: ListUsersOptions): Promise<ListUsersResult> {
+  // ...
+}
+
+// controllers/users/get.ts – HTTP handling
+export async function getUsersController(context: Context, request: IncomingMessage, response: ServerResponse) {
+  const result = await listUsers(context, options);
+  sendJsonValidated(response, 200, result, UsersListResponseSchema);
+}
+```
+
+#### Error Handling
+
+- Models: throw business logic errors (`NotFoundError`, `ConflictError`, `ValidationError`).
+- Controllers: validate inputs and allow errors to bubble to the HTTP error middleware.
+
+#### Testing Strategy
+
+- Model tests: data operations, business rules, edge cases.
+- Controller tests: HTTP handling, authentication, input validation, OpenAPI shapes.
+- Integration tests: end-to-end from HTTP to database using real dependencies where possible.
+
+### 1. Context Pattern
+
+The context object contains all dependencies (database, services, config) and is passed to every function. This enables:
+- Easy testing by mocking (external) dependencies
+- No global state
+- Explicit dependencies
+- Simple dependency injection
+
+### 2. Single Function Exports
+
+Each file exports individual functions, not classes or objects. Functions take context as their first parameter.
+
+### 3. Error Handling
+
+Use AppError for application-specific errors that bubble up to the HTTP layer for proper handling.
+
+## Implementation
+
+### UI Guidelines
+- React + TypeScript + CSS Modules.
+- No runtime CSS-in-JS. Keep styles co-located via Modules.
+- Build with a minimal bundler (e.g., Vite). Output is static and served by the Node HTTP server.
+- Apply a strict CSP; no inline scripts or styles. Prefer hashed/script-src only when unavoidable.
+
+### Server Lifecycle Guarantees
+- Use a single entrypoint that builds config, constructs a fresh context, and then builds servers using the shared factory.
+- Never swallow lifecycle errors; surface them and fail fast in dev/test. Logs must include the failing phase (start/stop/restart).
+- Track and destroy open sockets per server on stop to avoid close hangs.
+- All background timers, intervals, DB pools, and service instances are owned by context and registered for cleanup.
+
+Background work safety:
+- When a server is stopping or restarting, nothing spawned from that server may continue using the old context. This includes background jobs, queues, schedulers, and loggers.
+- Provide a liveness token or generation number on context. Background tasks must check it and abort if the context is closed or generation has changed.
+- If work must survive restart, flush it before stop or persist it to a durable queue and resume with the new context after restart.
+- Never write to databases, queues, or files using a closed or stale context.
+
+Fresh context on restart:
+- Always rebuild context from the source of truth (env, config files, database) rather than reusing mutated in‑memory state.
+- Recreate connection pools and service instances; do not carry handles across restarts.
+
+Readiness workflow:
+- start() resolves only when all servers report healthy.
+- stop() resolves only when all servers are closed and resources are cleaned.
+- restart() resolves only when new servers are healthy on the same ports.
+
+
+### types.ts
+```typescript
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from './db/schema';
+
+export interface Context {
+  db: NodePgDatabase<typeof schema>;
+  config: Config;
+  services: Services;
+}
+
+export interface Services {
+  emailProvider?: {
+    send: (options: { to: string; subject: string; html: string }) => Promise<{ messageId: string }>;
+  };
+  paymentProvider?: {
+    createCharge: (amount: number, token: string) => Promise<{ id: string; status: string }>;
+  };
+}
+
+export interface Config {
+  port: number;
+  databaseUrl: string;
+  jwtSecret: string;
+}
+
+### Ports And Bindings
+- Define ports per server in config (by name if multiple). Do not hard‑code numeric ports in code.
+- Keep bindings stable across restarts so clients and tests can rely on addresses.
+```
+
+### errors.ts
+- Note: this is one of the very rare times a class is appropriate in a functional project.
+
+We should bubble errors up from controllers, models, etc to the HTTP layer, where they can be handled appropriately. This allows us to return meaningful error responses to the client.
+
+That means we rarely need to try/catch, unless we are trying to catch a specific error type to then convert it to an AppError. Any other errors should bubble up to the HTTP layer where they can be handled appropriately. AppErrors can be responded to the client with a specific status code and message (if status is given), while other errors can be logged and a generic 500 error can be returned.
+
+```typescript
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number = 500,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message: string, public details?: any) {
+    super(message, 400, 'VALIDATION_ERROR');
+  }
+}
+
+export class NotFoundError extends AppError {
+  constructor(message: string = 'Resource not found') {
+    super(message, 404, 'NOT_FOUND');
+  }
+}
+
+export class ConflictError extends AppError {
+  constructor(message: string) {
+    super(message, 409, 'CONFLICT');
+  }
+}
+```
+
+### db/schema.ts
+```typescript
+import { pgTable, uuid, text, timestamp, boolean, integer } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').unique().notNull(),
+  name: text('name').notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const posts = pgTable('posts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: text('title').notNull(),
+  content: text('content').notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  published: boolean('published').default(false).notNull(),
+  viewCount: integer('view_count').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const usersRelations = relations(users, ({ many }) => ({
+  posts: many(posts),
+}));
+
+export const postsRelations = relations(posts, ({ one }) => ({
+  user: one(users, {
+    fields: [posts.userId],
+    references: [users.id],
+  }),
+}));
+```
+
+### schemas/users.ts
+```typescript
+import { z } from 'zod';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+import { users } from '../db/schema';
+
+// Base schemas generated from Drizzle table
+const selectUserSchema = createSelectSchema(users);
+const insertUserSchema = createInsertSchema(users);
+
+// API response schemas (what we expose externally)
+export const UserSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string().min(1).max(100),
+  createdAt: z.date(),
+});
+
+export const CreateUserSchema = z.object({
+  email: z.string().email(),
+  name: z.string().min(1).max(100),
+});
+
+export const UpdateUserSchema = CreateUserSchema.partial();
+
+// Type exports
+export type User = z.infer<typeof UserSchema>;
+export type CreateUser = z.infer<typeof CreateUserSchema>;
+export type UpdateUser = z.infer<typeof UpdateUserSchema>;
+
+// Database to API transformation
+export function toApiUser(dbUser: typeof selectUserSchema._type) {
+  return UserSchema.parse({
+    id: dbUser.id,
+    email: dbUser.email,
+    name: dbUser.name,
+    createdAt: dbUser.createdAt,
+  });
+}
+```
+
+### schemas/posts.ts
+```typescript
+import { z } from 'zod';
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
+import { posts } from '../db/schema';
+import { UserSchema } from './users';
+
+// Base schemas
+const selectPostSchema = createSelectSchema(posts);
+const insertPostSchema = createInsertSchema(posts);
+
+// API schemas
+export const PostSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().min(1).max(200),
+  content: z.string().min(1),
+  userId: z.string().uuid(),
+  published: z.boolean(),
+  viewCount: z.number().int().min(0),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export const PostWithUserSchema = PostSchema.extend({
+  user: UserSchema,
+});
+
+export const CreatePostSchema = z.object({
+  title: z.string().min(1).max(200),
+  content: z.string().min(1),
+  userId: z.string().uuid(),
+});
+
+export const UpdatePostSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  content: z.string().min(1).optional(),
+  published: z.boolean().optional(),
+});
+
+export const ListPostsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+  published: z.coerce.boolean().optional(),
+});
+
+// Type exports
+export type Post = z.infer<typeof PostSchema>;
+export type PostWithUser = z.infer<typeof PostWithUserSchema>;
+export type CreatePost = z.infer<typeof CreatePostSchema>;
+export type UpdatePost = z.infer<typeof UpdatePostSchema>;
+export type ListPostsQuery = z.infer<typeof ListPostsQuerySchema>;
+```
+
+### createContext.ts
+```typescript
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+import { Context, Config } from './types';
+import * as schema from './db/schema';
+
+export function createContext(config: Config) {
+  const cleanupFunctions: Array<() => Promise<void> | void> = [];
+
+  const pool = new Pool({
+    connectionString: config.databaseUrl,
+  });
+
+  const db = drizzle(pool, { schema });
+
+  cleanupFunctions.push(async () => {
+    await pool.end();
+  });
+
+  return {
+    db,
+    config,
+    services: {
+      // Initialize real services here in production
+      // emailProvider: createEmailProvider(config),
+      // paymentProvider: createPaymentProvider(config),
+    },
+    cleanupFunctions,
+    async destroy() {
+      for (const cleanup of this.cleanupFunctions) {
+        await cleanup();
+      }
+    },
+  };
+}
+```
+
+### createServer.ts
+Node.js `URLPattern` as a global, so no import is required.
+
+```typescript
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'http';
+import { ZodError } from 'zod';
+import { Context } from './types';
+import { AppError, ValidationError } from './errors';
+import { getUsersController } from './controllers/users/get';
+import { postUsersController } from './controllers/users/post';
+import { getUserController } from './controllers/users/[id]/get';
+import { postUserController } from './controllers/users/[id]/post';
+import { getPostsController } from './controllers/posts/get';
+import { postPostsController } from './controllers/posts/post';
+import { getPostController } from './controllers/posts/[id]/get';
+import { postPostController } from './controllers/posts/[id]/post';
+
+type RouteMatch = Exclude<ReturnType<URLPattern['exec']>, null>;
+
+type Route = {
+  method: 'GET' | 'POST';
+  pattern: URLPattern;
+  handler: (
+    context: Context,
+    request: IncomingMessage,
+    response: ServerResponse,
+    match: RouteMatch
+  ) => Promise<void> | void;
+};
+
+const routes: Route[] = [
+  {
+    method: 'GET',
+    pattern: new URLPattern({ pathname: '/users' }),
+    handler: getUsersController,
+  },
+  {
+    method: 'POST',
+    pattern: new URLPattern({ pathname: '/users' }),
+    handler: postUsersController,
+  },
+  {
+    method: 'GET',
+    pattern: new URLPattern({ pathname: '/users/:userId' }),
+    handler: (context, request, response, match) =>
+      getUserController(context, request, response, match.pathname.groups.userId),
+  },
+  {
+    method: 'POST',
+    pattern: new URLPattern({ pathname: '/users/:userId' }),
+    handler: (context, request, response, match) =>
+      postUserController(context, request, response, match.pathname.groups.userId),
+  },
+  {
+    method: 'GET',
+    pattern: new URLPattern({ pathname: '/posts' }),
+    handler: getPostsController,
+  },
+  {
+    method: 'POST',
+    pattern: new URLPattern({ pathname: '/posts' }),
+    handler: postPostsController,
+  },
+  {
+    method: 'GET',
+    pattern: new URLPattern({ pathname: '/posts/:postId' }),
+    handler: (context, request, response, match) =>
+      getPostController(context, request, response, match.pathname.groups.postId),
+  },
+  {
+    method: 'POST',
+    pattern: new URLPattern({ pathname: '/posts/:postId' }),
+    handler: (context, request, response, match) =>
+      postPostController(context, request, response, match.pathname.groups.postId),
+  },
+];
+
+export function createServer(context: Context) {
+  return createHttpServer(async (request: IncomingMessage, response: ServerResponse) => {
+    try {
+      const url = new URL(request.url || '', `http://${request.headers.host}`);
+      const method = (request.method || 'GET').toUpperCase() as Route['method'];
+
+      for (const route of routes) {
+        if (route.method !== method) {
+          continue;
+        }
+
+        const match = route.pattern.exec(url);
+        if (!match) {
+          continue;
+        }
+
+        await route.handler(context, request, response, match);
+        return;
+      }
+
+      response.statusCode = 404;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ error: 'Not found' }));
+    } catch (error) {
+      if (error instanceof AppError) {
+        response.statusCode = error.statusCode;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({
+          error: error.message,
+          code: error.code,
+          ...(error instanceof ValidationError && error.details ? { details: error.details } : {})
+        }));
+        return;
+      }
+
+      if (error instanceof ZodError) {
+        response.statusCode = 400;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ error: error.message, details: error.errors }));
+        return;
+      }
+
+      console.error('Unexpected error:', error);
+      response.statusCode = 500;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ error: 'Internal server error' }));
+    }
+  });
+}
+```
+
+Each handler receives the `URLPattern` match, which exposes named parameters under `match.pathname.groups`. The `[id]` controllers keep their existing `userId`/`postId` arguments; the router extracts the identifier from the groups and forwards it to the controller.
+
+### main.ts
+```typescript
+import { createContext } from './createContext';
+import { createServer } from './createServer';
+
+async function main() {
+  const config = {
+    port: parseInt(process.env.PORT || '3000', 10),
+    databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
+    jwtSecret: process.env.JWT_SECRET || 'development-secret',
+  };
+
+  const context = createContext(config);
+  const server = createServer(context);
+
+  server.listen(config.port, () => {
+    console.log(`Server listening on port ${config.port}`);
+  });
+}
+
+main().catch(console.error);
+```
+
+### models/users.ts
+```typescript
+import { eq } from 'drizzle-orm';
+import { Context } from '../types';
+import { NotFoundError, ConflictError } from '../errors';
+import { users } from '../db/schema';
+import { User, CreateUser, toApiUser } from '../schemas/users';
+
+export async function findUserById(context: Context, userId: string) {
+  const result = await context.db.query.users.findFirst({
+    where: eq(users.id, userId),
+  });
+
+  return result ? toApiUser(result) : null;
+}
+
+export async function findUserByEmail(context: Context, email: string) {
+  const result = await context.db.query.users.findFirst({
+    where: eq(users.email, email),
+  });
+
+  return result ? toApiUser(result) : null;
+}
+
+export async function createUser(context: Context, data: CreateUser) {
+  const validUser = CreateUserSchema.parse(data);
+
+  const [result] = await context.db
+    .insert(users)
+    .values(validUser)
+    .returning();
+
+  return toApiUser(result);
+}
+
+export async function updateUser(
+  context: Context,
+  userId: string,
+  data: { name?: string; email?: string }
+) {
+  const validUser = UpdateUserSchema.parse(data);
+
+  const [result] = await context.db
+    .update(validUser)
+    .set({
+      ...data,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId))
+    .returning();
+
+  return result ? toApiUser(result) : null;
+}
+
+export async function deleteUser(context: Context, userId: string) {
+  const result = await context.db
+    .delete(users)
+    .where(eq(users.id, userId));
+
+  return result.rowCount > 0;
+}
+```
+
+### controllers/users/get.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { Context } from '../../types';
+import { listUsers } from '../../models/users';
+
+export async function getUsersController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse
+) {
+  const users = await listUsers(context, { limit: 50, offset: 0 });
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(users));
+}
+```
+
+### controllers/users/[id]/get.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { z } from 'zod';
+import { Context } from '../../../types';
+import { ValidationError, NotFoundError } from '../../../errors';
+import { findUserById } from '../../../models/users';
+
+const ParamsSchema = z.object({
+  userId: z.string().uuid(),
+});
+
+export async function getUserController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse,
+  userId: string
+) {
+  // Validate params
+  const parseResult = ParamsSchema.safeParse({ userId });
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid user ID format', parseResult.error.errors);
+  }
+
+  const user = await findUserById(context, parseResult.data.userId);
+
+  if (!user) {
+    throw new NotFoundError('User not found');
+  }
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+response.end(JSON.stringify(user));
+}
+```
+
+### controllers/users/[id]/post.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { z } from 'zod';
+import { Context } from '../../../types';
+import { ValidationError, NotFoundError } from '../../../errors';
+import { updateUser } from '../../../models/users';
+import { readBody } from '../../../utils/http';
+
+const ParamsSchema = z.object({
+  userId: z.string().uuid(),
+});
+
+const BodySchema = z
+  .object({
+    email: z.string().email().optional(),
+    name: z.string().min(1).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided',
+  });
+
+export async function postUserController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse,
+  userId: string
+) {
+  const parseParams = ParamsSchema.safeParse({ userId });
+  if (!parseParams.success) {
+    throw new ValidationError('Invalid user ID format', parseParams.error.errors);
+  }
+
+  const body = await readBody(request);
+
+  let rawData;
+  try {
+    rawData = JSON.parse(body);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+
+  const parseBody = BodySchema.safeParse(rawData);
+  if (!parseBody.success) {
+    throw new ValidationError('Validation error', parseBody.error.errors);
+  }
+
+  const updatedUser = await updateUser(context, parseParams.data.userId, parseBody.data);
+
+  if (!updatedUser) {
+    throw new NotFoundError('User not found');
+  }
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(updatedUser));
+}
+```
+
+### controllers/users/post.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { Context } from '../../types';
+import { ValidationError } from '../../errors';
+import { createUser } from '../../models/users';
+import { CreateUserSchema } from '../../schemas/users';
+import { readBody } from '../../utils/http';
+
+export async function postUsersController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse
+) {
+  const body = await readBody(request);
+
+  let rawData;
+  try {
+    rawData = JSON.parse(body);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+
+  // Validate input
+  const parseResult = CreateUserSchema.safeParse(rawData);
+  if (!parseResult.success) {
+    throw new ValidationError('Validation error', parseResult.error.errors);
+  }
+
+  // Create user
+  const user = await createUser(context, parseResult.data);
+
+  response.statusCode = 201;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(user));
+}
+```
+
+### controllers/posts/get.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { z } from 'zod';
+import { Context } from '../../types';
+import { ValidationError } from '../../errors';
+import { listPosts } from '../../models/posts';
+import { ListPostsQuerySchema } from '../../schemas/posts';
+
+export async function getPostsController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse
+) {
+  const url = new URL(request.url || '', `http://${request.headers.host}`);
+
+  // Parse and validate query parameters
+  const parseResult = ListPostsQuerySchema.safeParse({
+    limit: url.searchParams.get('limit'),
+    offset: url.searchParams.get('offset'),
+    published: url.searchParams.get('published'),
+  });
+
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid query parameters', parseResult.error.errors);
+  }
+
+  const posts = await listPosts(context, parseResult.data);
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(posts));
+}
+```
+
+### controllers/posts/[id]/get.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { z } from 'zod';
+import { Context } from '../../../types';
+import { ValidationError, NotFoundError } from '../../../errors';
+import { findPostById } from '../../../models/posts';
+
+const ParamsSchema = z.object({
+  postId: z.string().uuid(),
+});
+
+export async function getPostController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse,
+  postId: string
+) {
+  const parseParams = ParamsSchema.safeParse({ postId });
+  if (!parseParams.success) {
+    throw new ValidationError('Invalid post ID format', parseParams.error.errors);
+  }
+
+  const post = await findPostById(context, parseParams.data.postId);
+
+  if (!post) {
+    throw new NotFoundError('Post not found');
+  }
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(post));
+}
+```
+
+### controllers/posts/[id]/post.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { z } from 'zod';
+import { Context } from '../../../types';
+import { ValidationError, NotFoundError } from '../../../errors';
+import { updatePost } from '../../../models/posts';
+import { readBody } from '../../../utils/http';
+
+const ParamsSchema = z.object({
+  postId: z.string().uuid(),
+});
+
+const BodySchema = z
+  .object({
+    title: z.string().min(1).optional(),
+    content: z.string().optional(),
+    published: z.boolean().optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided',
+  });
+
+export async function postPostController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse,
+  postId: string
+) {
+  const parseParams = ParamsSchema.safeParse({ postId });
+  if (!parseParams.success) {
+    throw new ValidationError('Invalid post ID format', parseParams.error.errors);
+  }
+
+  const body = await readBody(request);
+
+  let rawData;
+  try {
+    rawData = JSON.parse(body);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+
+  const parseBody = BodySchema.safeParse(rawData);
+  if (!parseBody.success) {
+    throw new ValidationError('Validation error', parseBody.error.errors);
+  }
+
+  const updatedPost = await updatePost(context, parseParams.data.postId, parseBody.data);
+
+  if (!updatedPost) {
+    throw new NotFoundError('Post not found');
+  }
+
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(updatedPost));
+}
+```
+
+### controllers/posts/post.ts
+```typescript
+import { IncomingMessage, ServerResponse } from 'http';
+import { Context } from '../../types';
+import { ValidationError } from '../../errors';
+import { createPost } from '../../models/posts';
+import { CreatePostSchema } from '../../schemas/posts';
+import { readBody } from '../../utils/http';
+
+export async function postPostsController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse
+) {
+  const body = await readBody(request);
+
+  let rawData;
+  try {
+    rawData = JSON.parse(body);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+
+  // Validate input
+  const parseResult = CreatePostSchema.safeParse(rawData);
+  if (!parseResult.success) {
+    throw new ValidationError('Validation error', parseResult.error.errors);
+  }
+
+  // Create post
+  const post = await createPost(context, parseResult.data);
+
+  response.statusCode = 201;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(post));
+}
+```
+
+### utils/http.ts
+```typescript
+import { IncomingMessage } from 'http';
+import { ValidationError } from '../errors';
+
+export function readBody(request: IncomingMessage) {
+  return new Promise<string>((resolve, reject) => {
+    let body = '';
+    request.on('data', chunk => body += chunk);
+    request.on('end', () => resolve(body));
+    request.on('error', reject);
+  });
+}
+
+export function parseJsonSafely(jsonString: string): any {
+  try {
+    return JSON.parse(jsonString);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+}
+```
+
+### models/posts.ts
+```typescript
+import { eq, desc, and } from 'drizzle-orm';
+import { Context } from '../types';
+import { posts } from '../db/schema';
+import { Post, PostWithUser, CreatePost, ListPostsQuery } from '../schemas/posts';
+import { toApiUser } from '../schemas/users';
+
+export async function listPosts(
+  context: Context,
+  query: ListPostsQuery
+) {
+  const conditions = [];
+
+  if (query.published !== undefined) {
+    conditions.push(eq(posts.published, query.published));
+  }
+
+  const results = await context.db
+    .select()
+    .from(posts)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(posts.createdAt))
+    .limit(query.limit)
+    .offset(query.offset);
+
+  return results.map(row => ({
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    userId: row.userId,
+    published: row.published,
+    viewCount: row.viewCount,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function listPostsWithUsers(
+  context: Context,
+  query: ListPostsQuery
+) {
+  const conditions = [];
+
+  if (query.published !== undefined) {
+    conditions.push(eq(posts.published, query.published));
+  }
+
+  const results = await context.db.query.posts.findMany({
+    where: conditions.length > 0 ? and(...conditions) : undefined,
+    with: {
+      user: true,
+    },
+    orderBy: desc(posts.createdAt),
+    limit: query.limit,
+    offset: query.offset,
+  });
+
+  return results.map(row => ({
+    id: row.id,
+    title: row.title,
+    content: row.content,
+    userId: row.userId,
+    published: row.published,
+    viewCount: row.viewCount,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    user: toApiUser(row.user),
+  }));
+}
+
+export async function createPost(
+  context: Context,
+  data: CreatePost
+) {
+  const [result] = await context.db
+    .insert(posts)
+    .values(data)
+    .returning();
+
+  return {
+    id: result.id,
+    title: result.title,
+    content: result.content,
+    userId: result.userId,
+    published: result.published,
+    viewCount: result.viewCount,
+    createdAt: result.createdAt,
+    updatedAt: result.updatedAt,
+  };
+}
+
+export async function findPostById(
+  context: Context,
+  postId: string
+) {
+  const result = await context.db.query.posts.findFirst({
+    where: eq(posts.id, postId),
+  });
+
+  if (!result) return null;
+
+  return {
+    id: result.id,
+    title: result.title,
+    content: result.content,
+    userId: result.userId,
+    published: result.published,
+    viewCount: result.viewCount,
+    createdAt: result.createdAt,
+    updatedAt: result.updatedAt,
+  };
+}
+
+export async function updatePost(
+  context: Context,
+  postId: string,
+  data: { title?: string; content?: string; published?: boolean }
+) {
+  const [result] = await context.db
+    .update(posts)
+    .set({
+      ...data,
+      updatedAt: new Date(),
+    })
+    .where(eq(posts.id, postId))
+    .returning();
+
+  if (!result) return null;
+
+  return {
+    id: result.id,
+    title: result.title,
+    content: result.content,
+    userId: result.userId,
+    published: result.published,
+    viewCount: result.viewCount,
+    createdAt: result.createdAt,
+    updatedAt: result.updatedAt,
+  };
+}
+```
+
+## Testing
+
+### Test Database Setup
+
+Before running tests, you need to set up a test database. This ensures tests run against real database operations rather than mocks:
+
+```bash
+# Create test database
+createdb myapp_test
+
+# Set environment variable
+export TEST_DATABASE_URL="postgresql://localhost/myapp_test"
+
+# Run migrations on test database
+DATABASE_URL=$TEST_DATABASE_URL npm run db:migrate
+```
+
+### packages/api/tests/helpers/createTestServer.ts
+```typescript
+import { createServer } from '../../src/createServer';
+import { createContext } from '../../src/createContext';
+import { Context } from '../../src/types';
+import http from 'node:http';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+import * as schema from '../../src/db/schema';
+
+export function createTestContext() {
+  const config = {
+    port: 0,
+    databaseUrl: process.env.TEST_DATABASE_URL || 'postgresql://localhost/myapp_test',
+    jwtSecret: 'test-secret',
+  };
+
+  return createContext(config);
+}
+
+export function createTestServer(context: Context) {
+  return createServer(context);
+}
+
+export async function cleanupDatabase(context: Context) {
+  await context.db.delete(schema.posts);
+  await context.db.delete(schema.users);
+}
+```
+
+### packages/api/tests/controllers/users/[id]/get.test.ts
+```typescript
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert';
+import http from 'node:http';
+import { createTestServer, createTestContext, cleanupDatabase } from '../../helpers/createTestServer';
+import { Context } from '../../../src/types';
+import { createUser } from '../../../src/models/users';
+
+describe('GET /users/:id', () => {
+  let context: Context;
+  let server: http.Server;
+
+  beforeEach(async () => {
+    context = createTestContext();
+    server = createTestServer(context);
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, () => resolve());
+    });
+
+    await cleanupDatabase(context);
+  });
+
+  afterEach(async () => {
+    await cleanupDatabase(context);
+    await context.destroy();
+
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  it('should return user when found', async () => {
+    const user = await createUser(context, {
+      email: 'test@example.com',
+      name: 'Test User',
+    });
+
+    const port = (server.address() as any).port;
+    const response = await fetch(`http://localhost:${port}/users/${user.id}`);
+    assert.strictEqual(response.status, 200);
+    const body = await response.json();
+    assert.strictEqual(body.id, user.id);
+    assert.strictEqual(body.email, 'test@example.com');
+    assert.strictEqual(body.name, 'Test User');
+    assert.ok(body.createdAt);
+  });
+
+  it('should return 404 when user not found', async () => {
+    const port = (server.address() as any).port;
+    const response = await fetch(`http://localhost:${port}/users/550e8400-e29b-41d4-a716-446655440000`);
+    assert.strictEqual(response.status, 404);
+    const body = await response.json();
+    assert.deepStrictEqual(body, {
+      error: 'User not found',
+      code: 'NOT_FOUND',
+    });
+  });
+
+  it('should return 400 for invalid UUID', async () => {
+    const port = (server.address() as any).port;
+    const response = await fetch(`http://localhost:${port}/users/invalid-uuid`);
+    assert.strictEqual(response.status, 400);
+    const body = await response.json();
+    assert.strictEqual(body.error, 'Invalid user ID format');
+    assert.strictEqual(body.code, 'VALIDATION_ERROR');
+  });
+});
+```
+
+### packages/api/tests/models/users.test.ts
+```typescript
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert';
+import { findUserById, createUser } from '../../src/models/users';
+import { createTestContext, cleanupDatabase } from '../helpers/createTestServer';
+import { Context } from '../../src/types';
+
+describe('User Model', () => {
+  let context: Context;
+
+  beforeEach(async () => {
+    context = createTestContext();
+    await cleanupDatabase(context);
+  });
+
+  afterEach(async () => {
+    await cleanupDatabase(context);
+    await context.destroy();
+  });
+
+  describe('findUserById', () => {
+    it('should return user when found', async () => {
+      const createdUser = await createUser(context, {
+        email: 'test@example.com',
+        name: 'Test User',
+      });
+
+      const foundUser = await findUserById(context, createdUser.id);
+
+      assert.ok(foundUser);
+      assert.strictEqual(foundUser.id, createdUser.id);
+      assert.strictEqual(foundUser.email, 'test@example.com');
+      assert.strictEqual(foundUser.name, 'Test User');
+      assert.ok(foundUser.createdAt);
+    });
+
+    it('should return null when user not found', async () => {
+      const user = await findUserById(context, '550e8400-e29b-41d4-a716-446655440000');
+
+      assert.strictEqual(user, null);
+    });
+  });
+
+  describe('createUser', () => {
+    it('should create and return a new user', async () => {
+      const userData = {
+        email: 'new@example.com',
+        name: 'New User',
+      };
+
+      const user = await createUser(context, userData);
+
+      assert.ok(user.id);
+      assert.strictEqual(user.email, userData.email);
+      assert.strictEqual(user.name, userData.name);
+      assert.ok(user.createdAt);
+    });
+  });
+});
+```
+
+## Best Practices
+
+### 1. Pure Functions
+Keep functions pure when possible. Side effects should be explicit and isolated.
+
+```typescript
+// Good: Pure function
+export function calculateDiscount(price: number, percentage: number) {
+  return price * (1 - percentage / 100);
+}
+
+// Good: Side effect is explicit via context
+export async function saveOrder(context: Context, order: Order) {
+  await context.db.query('INSERT INTO orders...', [order.id]);
+}
+```
+
+### 2. Utility Functions
+Abstract small, reusable functions into utils. Keep them pure and focused on doing one thing well.
+
+**Principles for Utils:**
+- **Pure when possible**: No side effects, same input produces same output
+- **Single responsibility**: Each function does one thing only
+- **Descriptive names**: Function name clearly describes what it does
+- **Easy to test**: Pure functions are trivial to unit test
+
+```typescript
+// Good: Small, pure, reusable utility
+export function parseJsonSafely(jsonString: string): any {
+  try {
+    return JSON.parse(jsonString);
+  } catch {
+    throw new ValidationError('Invalid JSON');
+  }
+}
+
+// Good: Single responsibility
+export function formatCurrency(amount: number, currency = 'USD'): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+  }).format(amount);
+}
+
+// Usage in controllers becomes cleaner
+const rawData = parseJsonSafely(body); // vs inline try/catch
+const price = formatCurrency(order.amount); // vs inline formatting
+```
+
+**What to put in utils:**
+- JSON parsing with error handling
+- Date formatting and manipulation
+- String transformations
+- Mathematical calculations
+- Validation helpers
+- Type guards
+
+**What NOT to put in utils:**
+- Functions that require context (database operations)
+- Business logic (that belongs in services/models)
+- Functions that are only used once
+- Complex multi-step operations
+
+### 2a. Service Patterns & Libraries
+Use the simplest reliable building block for cross-cutting concerns (events, caching, rate limiting).
+
+- Built-ins first: prefer Node primitives (`events`, timers, `Map`, `Set`).
+- Small, pure libraries: when needed, choose single-responsibility libraries with no framework tie-ins and minimal side effects (easy to replace).
+- Build vs buy:
+  - Build tiny helpers (e.g., `removeDuplicates`) in `utils/`.
+  - Do not reimplement complex, well-solved components without a clear reason (e.g., event emitters).
+  - Rate limiting: in-memory, per-process limiters are fine for simple cases; for production or multi-instance needs, use a focused library or a store-backed approach (e.g., Redis).
+- Events: prefer Node’s `events` module for simple pub/sub; consider `emittery` for a small, promise-friendly API. Avoid inventing custom emitters unless requirements are minimal.
+
+### 2b. Packaging Guidelines (Monorepo)
+Decide where code lives based on scope and responsibility.
+
+- Keep small, pure utilities in `utils/` within the app/package that uses them.
+- Promote larger “service patterns” (cache, rate limiter, event bus) to their own workspace package under `packages/<name>` when they grow beyond trivial use. This keeps boundaries clean and enables extraction.
+- Avoid catch-all umbrella packages (e.g., `@CompanyLtdUtilLibrary`). Create narrowly scoped packages with clear, focused APIs.
+
+### 3. Error Handling
+Use `AppError` classes for application-specific errors that bubble up to the HTTP layer. Controllers translate those errors into HTTP responses so we only throw and let them bubble.
+
+```typescript
+export async function authenticateUser(
+  context: Context,
+  email: string,
+  password: string
+) {
+  const user = await findUserByEmail(context, email);
+  if (!user) {
+    throw new ValidationError('Invalid credentials');
+  }
+
+  const valid = await verifyPassword(context, password, user.passwordHash);
+  if (!valid) {
+    throw new ValidationError('Invalid credentials');
+  }
+
+  return user;
+}
+```
+
+### 4. Composition
+Build complex operations from simple functions.
+
+```typescript
+export async function registerUser(
+  context: Context,
+  data: { email: string; password: string; name: string }
+) {
+  // Compose smaller functions
+  const existingUser = await findUserByEmail(context, data.email);
+  if (existingUser) {
+    throw new ConflictError('Email already exists');
+  }
+
+  const passwordHash = await hashPassword(context, data.password);
+  const user = await createUser(context, {
+    email: data.email,
+    name: data.name,
+    passwordHash,
+  });
+
+  await sendWelcomeEmail(context, user);
+
+  return user;
+}
+```
+
+### 5. External Service Integration
+Use the context pattern to inject external services, making them easy to mock in tests.
+
+```typescript
+// services/email.ts
+export async function sendWelcomeEmail(context: Context, user: User) {
+  if (!context.services.emailProvider) {
+    throw new Error('Email provider not configured');
+  }
+
+  await context.services.emailProvider.send({
+    to: user.email,
+    subject: 'Welcome to our app!',
+    html: `<h1>Welcome ${user.name}!</h1>`,
+  });
+}
+
+// services/payment.ts
+export async function processPayment(
+  context: Context,
+  amount: number,
+  paymentToken: string
+) {
+  if (!context.services.paymentProvider) {
+    throw new Error('Payment provider not configured');
+  }
+
+  const charge = await context.services.paymentProvider.createCharge(amount, paymentToken);
+
+  if (charge.status !== 'succeeded') {
+    throw new Error('Payment failed');
+  }
+
+  return charge;
+}
+```
+
+### 6. Testing Strategy
+
+#### What to Mock vs What Not to Mock
+
+**DO NOT MOCK (use real implementations):**
+- Database operations (PostgreSQL)
+- File system operations
+- Internal application services
+- HTTP requests within your application
+- Any infrastructure your application owns
+
+**DO MOCK (external third-party services):**
+- Email providers (SendGrid, Mailgun, etc.)
+- Payment processors (Stripe, PayPal, etc.)
+- SMS services (Twilio, etc.)
+- External APIs (weather, geocoding, etc.)
+
+#### Using Node.js Built-in Test Runner
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run specific test file
+tsx --test src/models/users.test.ts
+```
+
+#### Readiness In Tests
+- Do not add arbitrary sleeps. Rely on server lifecycle guarantees: start/stop/restart resolve only when ready.
+- If a restart is triggered asynchronously from within a request handler, probe the health endpoint until ready instead of sleeping.
+- Prefer the dot reporter when running tests that start HTTP servers to avoid TTY stalls.
+
+#### Test Structure
+- Use `describe`, `it`, `beforeEach`, `afterEach` from `node:test`
+- Use `assert` from `node:assert` for assertions
+- Keep tests close to the code they test
+
+#### Example Test Pattern for External Services
+```typescript
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
+import assert from 'node:assert';
+import { createTestContext, cleanupDatabase } from '../helpers/createTestServer';
+
+describe('Email Service Integration', () => {
+  let context: Context;
+  let mockSendEmail: any;
+
+  beforeEach(async () => {
+    context = createTestContext();
+    await cleanupDatabase(context);
+
+    // Mock external email service (like Twilio SendGrid)
+    mockSendEmail = mock.fn();
+    context.services.emailProvider = {
+      send: mockSendEmail,
+    };
+  });
+
+  afterEach(async () => {
+    await cleanupDatabase(context);
+    await context.destroy();
+  });
+
+  it('should send welcome email when user registers', async () => {
+    mockSendEmail.mock.mockImplementation(() => Promise.resolve({ messageId: '123' }));
+
+    const user = await registerUser(context, {
+      email: 'test@example.com',
+      password: 'password123',
+      name: 'Test User',
+    });
+
+    assert.ok(user);
+    assert.strictEqual(mockSendEmail.mock.calls.length, 1);
+    assert.strictEqual(mockSendEmail.mock.calls[0].arguments[0].to, 'test@example.com');
+  });
+});
+```
+
+#### Testing Best Practices
+- Unit test pure functions without context
+- Integration test functions that use context with real database
+- Only mock external third-party services (like Twilio, Stripe, etc.)
+- Use real database for all internal operations
+- Clean up database state between tests
+- Test error cases explicitly
+- Use minimal test setup
+- Avoid testing implementation details
+
+## Dependencies
+
+### Core Principles
+
+**Resist dependencies.** Less is more. Every dependency is a liability—more attack surface, more breaking changes, more complexity.
+
+**Don't be over the top.** Don't rewrite React, Zod, or database drivers. Use mature, battle-tested libraries for complex problems.
+
+**You probably don't need lodash.** Modern JavaScript has most of what you need built-in.
+
+### Avoid Vertical Dependency Stacks
+
+Frameworks like Express create dependency chains that become maintenance nightmares:
+
+```
+express → express-body-parser → express-passport → express-session → express-rate-limit
+```
+
+When Express updates, every middleware might break. When `express-body-parser` updates, you're stuck coordinating versions across the entire stack.
+
+**Better approach:** Use focused, single-purpose libraries.
+
+Instead of:
+- `express-body-parser` → Use a standalone body parser like `@fastify/formbody`
+- `express-passport` → Use a dedicated auth library like `jose` for JWT
+- `express-session` → Use a session library that works with any framework
+
+### Middleware is an Anti-Pattern
+
+Middleware encourages mutation of objects you don't control. Why does `request.body` magically appear?
+
+```javascript
+// Bad: Mysterious mutation
+app.use(bodyParser.json())
+app.post('/api', (request, response) => {
+  // Where did request.body come from?
+  console.log(request.body)
+})
+
+// Good: Explicit and testable
+app.post('/api', (request, response) => {
+  const body = parseJsonBody(request)
+  console.log(body)
+})
+```
+
+Explicit is better than implicit. Functions are better than magic.
+
+## Database Configuration
+
+### packages/api/drizzle.config.ts
+```typescript
+import { defineConfig } from 'drizzle-kit';
+
+export default defineConfig({
+  dialect: 'postgresql',
+  schema: './src/db/schema.ts',
+  out: './drizzle',
+  dbCredentials: {
+    url: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
+  },
+});
+```
+
+### packages/api/src/db/migrate.ts
+```typescript
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { Pool } from 'pg';
+import * as schema from './schema';
+
+async function runMigrations() {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
+  });
+
+  const db = drizzle(pool, { schema });
+
+  console.log('Running migrations...');
+  await migrate(db, { migrationsFolder: './drizzle' });
+  console.log('Migrations complete');
+
+  await pool.end();
+}
+
+runMigrations().catch(console.error);
+```
+
+## TypeScript Compilation Strategy
+
+### Applications vs Libraries
+
+**For Node.js Applications:**
+- Don't compile TypeScript to JavaScript
+- Use `tsx` to run TypeScript files directly: `tsx src/main.ts`
+- Faster development cycle, no build step needed
+- Simpler deployment (just copy source files)
+
+**For Libraries:**
+- Always compile to JavaScript before publishing
+- Avoids TypeScript version conflicts with consuming applications
+- Provides better compatibility across different Node.js environments
+- Include declaration files for TypeScript consumers
+
+### Running Applications
+
+```bash
+# Development
+tsx --watch src/main.ts
+
+# Production (still no compilation needed)
+tsx src/main.ts
+
+# With environment variables
+DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
+```
+
+### Root package.json (Workspace Configuration)
+```json
+{
+  "name": "project-root",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@project/api",
+    "dev:ui": "npm run dev --workspace=@project/ui",
+    "dev:admin": "npm run dev --workspace=@project/admin-ui",
+    "dev:all": "npm run dev --workspace=@project/api & npm run dev --workspace=@project/ui & npm run dev --workspace=@project/admin-ui",
+    "build:ui": "npm run build --workspace=@project/ui",
+    "build:admin": "npm run build --workspace=@project/admin-ui",
+    "test": "npm run test --workspaces",
+    "install": "npm install --workspaces"
+  }
+}
+```
+
+### packages/api/package.json
+```json
+{
+  "name": "@project/api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "tsx --test tests/**/*.test.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "tsx": "^4.0.0",
+    "drizzle-orm": "^0.29.0",
+    "pg": "^8.11.0",
+    "zod": "^3.22.0"
+  }
+}
+```
+
+### packages/ui/package.json
+```json
+{
+  "name": "@project/ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}
+```
+
+### packages/admin-ui/package.json
+```json
+{
+  "name": "@project/admin-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}
+```
+
+### Libraries package.json (if building libraries)
+```json
+{
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "tsx --test src/**/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
+```
+
+## OpenAPI Documentation
+
+### Controller Schema Exports
+
+Each controller should export an OpenAPI schema using `zod-to-openapi`:
+
+```typescript
+import { z } from 'zod';
+import { createRouteSpec } from '@asteasolutions/zod-to-openapi';
+import { UserSchema } from '../../schemas/users';
+
+export const openApiSchema = createRouteSpec({
+  method: 'get',
+  path: '/users/{userId}',
+  tags: ['Users'],
+  summary: 'Get user by ID',
+  request: {
+    params: z.object({
+      userId: z.string().uuid().openapi({ example: '550e8400-e29b-41d4-a716-446655440000' })
+    })
+  },
+  responses: {
+    200: {
+      description: 'User found',
+      content: {
+        'application/json': {
+          schema: UserSchema
+        }
+      }
+    },
+    404: {
+      description: 'User not found',
+      content: {
+        'application/json': {
+          schema: z.object({
+            error: z.string(),
+            code: z.string()
+          })
+        }
+      }
+    }
+  }
+});
+```
+
+### OpenAPI Endpoint
+
+Create an `/openapi` endpoint that collects all controller schemas:
+
+```typescript
+// In createServer.ts
+import { OpenAPIGenerator } from '@asteasolutions/zod-to-openapi';
+import { openApiSchema as listUsersSchema } from './controllers/users/get';
+import { openApiSchema as postUsersSchema } from './controllers/users/post';
+import { openApiSchema as getUserSchema } from './controllers/users/[id]/get';
+import { openApiSchema as postUserSchema } from './controllers/users/[id]/post';
+
+function generateOpenApiDocument() {
+  const generator = new OpenAPIGenerator([
+    listUsersSchema,
+    postUsersSchema,
+    getUserSchema,
+    postUserSchema,
+    // ... other controller schemas
+  ]);
+
+  return generator.generateDocument({
+    openapi: '3.0.0',
+    info: {
+      version: '1.0.0',
+      title: 'API Documentation',
+      description: 'Generated API documentation'
+    },
+    servers: [{ url: 'http://localhost:3000' }]
+  });
+}
+
+routes.push({
+  method: 'GET',
+  pattern: new URLPattern({ pathname: '/openapi' }),
+  handler: async (_context, _request, response) => {
+    const openApiDoc = generateOpenApiDocument();
+    response.statusCode = 200;
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(openApiDoc, null, 2));
+  },
+});
+```
+
+### Best Practices
+
+- Export `openApiSchema` from each controller file
+- Use descriptive tags and summaries
+- Include example values for better documentation
+- Document all response codes including error cases
+- Keep schemas consistent with your Zod validation schemas
+
+## Summary
+
+This approach provides:
+- **Testability**: Easy to mock external dependencies via context
+- **Simplicity**: No frameworks, minimal dependencies
+- **Explicitness**: All dependencies are visible
+- **Flexibility**: Easy to add new features or change implementations
+- **Type Safety**: Full TypeScript support with Zod runtime validation
+- **Functional**: Encourages pure functions and composition
+- **Database Safety**: Type-safe queries with Drizzle ORM
+- **API Validation**: Input/output validation with Zod schemas
+- **Error Handling**: Centralized error handling with AppError classes
+- **API Documentation**: Auto-generated OpenAPI specs from controller schemas
+
+The context pattern combined with single function exports creates a clean, maintainable codebase that's easy to understand and test.
+
+## Key Principles
+
+1. **Separation of Concerns**:
+   - Database schemas (Drizzle) define database structure
+   - API schemas (Zod) define external contracts
+   - Models handle data access
+   - Controllers handle HTTP logic and validation
+
+2. **Type Safety Layers**:
+   - Internal types (Context, Config) use plain TypeScript
+   - External types (API responses) use Zod for runtime validation
+   - Database queries are fully typed with Drizzle
+   - Return types omitted where TypeScript can infer them
+
+3. **Error Handling**:
+   - AppError classes for application-specific errors
+   - Errors bubble up to HTTP layer for centralized handling
+   - Validation errors include detailed information
+   - Database constraint violations handled appropriately
+
+4. **No Abbreviations**:
+   - Use full names: `request` instead of `req`, `response` instead of `res`
+   - Improves code readability and maintainability
