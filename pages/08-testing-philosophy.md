@@ -2,11 +2,10 @@
 title: "Testing Philosophy: Mock the World, Not Your App"
 tagline: "Mock Twilio. Use real Postgres."
 subtitle: "Why Mocking Your Database Makes Your Tests Worthless"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Testing"
 tags: ["testing", "mocking", "integration-tests", "philosophy"]
-order: 7
+order: 8
 ---
 
 ## The Great Testing Lie

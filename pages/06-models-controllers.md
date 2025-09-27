@@ -2,11 +2,10 @@
 title: "Models vs Controllers"
 tagline: "HTTP adapters meet business logic."
 subtitle: "True Separation of Concerns"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Architecture"
 tags: ["models", "controllers", "separation-of-concerns", "mvc"]
-order: 5
+order: 6
 ---
 
 :::success

@@ -1,8 +1,7 @@
 ---
 title: "Why Functional Node.js?"
 tagline: "Frameworks promise magic. Let's deliver understanding instead."
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Introduction"
 tags: ["functional", "nodejs", "architecture"]
 order: 2

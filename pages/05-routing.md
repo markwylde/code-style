@@ -2,11 +2,10 @@
 title: "Routing with URLPattern"
 tagline: "Declarative paths. Predictable handlers."
 subtitle: "Building HTTP entrypoints without frameworks"
-author: "Mark Wylde"
-date: "2024-12-25"
+date: "2025-09-27"
 category: "Architecture"
 tags: ["routing", "urlpattern", "http", "controllers"]
-order: 10
+order: 5
 ---
 
 :::tip

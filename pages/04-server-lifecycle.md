@@ -2,8 +2,7 @@
 title: "Server Lifecycle"
 tagline: "Start clean. Stop gracefully. Never leak."
 subtitle: "Building Bulletproof Servers"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Infrastructure"
 tags: ["server", "lifecycle", "production", "testing"]
 order: 4

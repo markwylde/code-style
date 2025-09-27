@@ -1,5 +1,9 @@
+import parse, {
+  type Element,
+  type HTMLReactParserOptions,
+} from "html-react-parser";
 import { marked } from "marked";
-import { useEffect, useId, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import "./markdownExtensions";
 import specMarkdown from "../SPEC.md?raw";
 import AboutPage from "./AboutPage";
@@ -26,6 +30,27 @@ const markdownModules = import.meta.glob("../pages/*.md", {
   query: "?raw",
   import: "default",
 }) as Record<string, string>;
+
+const htmlParserOptions: HTMLReactParserOptions = {
+  replace(domNode) {
+    if (domNode.type === "script" || domNode.type === "style") {
+      return null;
+    }
+
+    if (domNode.type === "tag") {
+      const element = domNode as Element;
+      if (element.attribs) {
+        for (const attributeName of Object.keys(element.attribs)) {
+          if (attributeName.toLowerCase().startsWith("on")) {
+            delete element.attribs[attributeName];
+          }
+        }
+      }
+    }
+
+    return undefined;
+  },
+};
 
 function loadPages(): Page[] {
   return Object.entries(markdownModules)
@@ -202,6 +227,13 @@ export default function App(): JSX.Element {
 
   const specHtml = useMemo(() => marked.parse(specMarkdown), []);
 
+  const specFriendlyContent = useMemo<ReactNode>(() => {
+    if (!specHtml) {
+      return null;
+    }
+    return parse(specHtml, htmlParserOptions);
+  }, [specHtml]);
+
   useEffect(() => {
     if (view.section !== "spec") {
       setSpecMode("friendly");
@@ -303,6 +335,20 @@ export default function App(): JSX.Element {
     const renderedHtml = marked.parse(activePage.body);
     return splitIntroFromContent(renderedHtml);
   }, [activePage]);
+
+  const pageIntroContent = useMemo<ReactNode>(() => {
+    if (!pageHtml.introHtml) {
+      return null;
+    }
+    return parse(pageHtml.introHtml, htmlParserOptions);
+  }, [pageHtml.introHtml]);
+
+  const pageBodyContent = useMemo<ReactNode>(() => {
+    if (!pageHtml.contentHtml) {
+      return null;
+    }
+    return parse(pageHtml.contentHtml, htmlParserOptions);
+  }, [pageHtml.contentHtml]);
 
   // Unique IDs for elements that were previously static
   const guideArticleId = useId();
@@ -427,18 +473,10 @@ export default function App(): JSX.Element {
                 <div className="page-tagline">{activePage.tagline}</div>
               ) : null}
               <h2 className="page-title">{activePage.title}</h2>
-              {pageHtml.introHtml ? (
-                /* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is generated from trusted markdown */
-                <div
-                  className="page-intro"
-                  dangerouslySetInnerHTML={{ __html: pageHtml.introHtml }}
-                />
+              {pageIntroContent ? (
+                <div className="page-intro">{pageIntroContent}</div>
               ) : null}
-              {/* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is generated from trusted markdown */}
-              <div
-                className="page-content"
-                dangerouslySetInnerHTML={{ __html: pageHtml.contentHtml }}
-              />
+              <div className="page-content">{pageBodyContent}</div>
             </article>
           </>
         ) : null}
@@ -488,11 +526,7 @@ export default function App(): JSX.Element {
               </button>
             </div>
             {specMode === "friendly" ? (
-              /* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is generated from trusted markdown */
-              <div
-                className="spec-friendly"
-                dangerouslySetInnerHTML={{ __html: specHtml }}
-              />
+              <div className="spec-friendly">{specFriendlyContent}</div>
             ) : (
               <pre className="spec-raw">{specMarkdown}</pre>
             )}
