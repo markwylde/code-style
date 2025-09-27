@@ -292,7 +292,11 @@ Every server needs one:
 routes.push({
   method: 'GET',
   pattern: new URLPattern({ pathname: '/health' }),
-  handler: async (context, request, response) => {
+  controller: Promise.resolve({
+    schema: z.object({
+      params: z.object({})
+    }),
+    handler: async ({ context, response }) => {
     // Check critical dependencies
     const checks = {
       database: await checkDatabase(context),
@@ -302,14 +306,15 @@ routes.push({
 
     const healthy = Object.values(checks).every(v => v === true);
 
-    response.statusCode = healthy ? 200 : 503;
+    response.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({
       status: healthy ? 'healthy' : 'unhealthy',
       checks,
       uptime: process.uptime(),
       memory: process.memoryUsage()
     }));
-  }
+    }
+  })
 });
 
 async function checkDatabase(context) {

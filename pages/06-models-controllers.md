@@ -16,27 +16,30 @@ Controllers are HTTP adapters. Models are your business. That's it. That's the s
 
 Controllers translate between HTTP and your application:
 
-```javascript
-export async function createUserController(context, request, response) {
-  // 1. Parse HTTP input
-  const body = await readBody(request);
-  const data = JSON.parse(body);
+```typescript
+// controllers/users/post.ts
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+import { CreateUserSchema } from '../../schemas/users';
 
-  // 2. Validate HTTP input
-  const userData = CreateUserSchema.parse(data);
+export const schema = z.object({
+  body: CreateUserSchema
+});
 
-  // 3. Call the model (business logic)
-  const user = await createUser(context, userData);
+export async function handler({ context, response, body }: Handler<typeof schema>) {
+  // 1. Body arrives parsed & validated by the schema above
+  // 2. Call the model (business logic)
+  const user = await createUser(context, body);
 
-  // 4. Format HTTP output
+  // 3. Format HTTP output
   response.statusCode = 201;
   response.end(JSON.stringify(user));
 }
 ```
 
 That's it. Four responsibilities:
-1. Parse the request
-2. Validate input
+1. Declare the HTTP contract with a Zod schema
+2. Receive already parsed, validated data from the router
 3. Call the model
 4. Send the response
 
@@ -85,12 +88,18 @@ Models handle:
 
 Side effects (email, queues, external APIs) should be orchestrated by controllers or dedicated services, not inside models. This keeps models focused on domain state and makes side effects explicit at the edges.
 
-```javascript
+```typescript
 // Controller/service orchestrates side effects
-export async function postUsersController(context, request, response) {
-  const data = CreateUserSchema.parse(JSON.parse(await readBody(request)));
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+import { CreateUserSchema } from '../../schemas/users';
 
-  const user = await createUser(context, data);
+export const schema = z.object({
+  body: CreateUserSchema
+});
+
+export async function handler({ context, response, body }: Handler<typeof schema>) {
+  const user = await createUser(context, body);
   await sendWelcomeEmail(context, user); // side effect outside the model
 
   response.statusCode = 201;
@@ -132,12 +141,20 @@ Model tests verify business logic. Controller tests verify HTTP behavior.
 
 ### 2. **Reusability**
 
-```javascript
+```typescript
 // Use the same model from different interfaces
 
 // REST API
-export async function createUserController(context, request, response) {
-  const user = await createUser(context, data);
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+import { CreateUserSchema } from '../../schemas/users';
+
+export const schema = z.object({
+  body: CreateUserSchema
+});
+
+export async function handler({ context, response, body }: Handler<typeof schema>) {
+  const user = await createUser(context, body);
   response.end(JSON.stringify(user));
 }
 
@@ -200,18 +217,38 @@ Each layer has one job. No confusion. No mixing.
 
 ### 1. **Controllers Touching the Database**
 
-```javascript
+```typescript
 // BAD: Controller directly queries database
-export async function getUserController(context, request, response) {
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid()
+  })
+});
+
+export async function handler({ context, response, params }: Handler<typeof schema>) {
   const user = await context.db.query.users.findFirst({
-    where: eq(users.id, userId)
+    where: eq(users.id, params.userId)
   });
   response.end(JSON.stringify(user));
 }
+```
 
+```typescript
 // GOOD: Controller calls model
-export async function getUserController(context, request, response) {
-  const user = await findUserById(context, userId);
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid()
+  })
+});
+
+export async function handler({ context, response, params }: Handler<typeof schema>) {
+  const user = await findUserById(context, params.userId);
   response.end(JSON.stringify(user));
 }
 ```
@@ -242,26 +279,45 @@ Why? Your model should work whether it's called from HTTP, GraphQL, CLI, or a ba
 
 ### 3. **Mixing Validation Layers**
 
-```javascript
+```typescript
 // BAD: Business validation in controller
-export async function createUserController(context, request, response) {
-  const data = JSON.parse(body);
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+import { CreateUserSchema } from '../../schemas/users';
 
+export const schema = z.object({
+  body: CreateUserSchema
+});
+
+export async function handler({ context, response, body }: Handler<typeof schema>) {
   // This is business logic!
-  if (data.age < 18) {
+  if (body.age < 18) {
     throw new ValidationError('Must be 18 or older');
   }
 
-  const user = await createUser(context, data);
+  const user = await createUser(context, body);
+
+  response.statusCode = 201;
+  response.end(JSON.stringify(user));
 }
+```
 
+```typescript
 // GOOD: Input validation in controller, business rules in model
-export async function createUserController(context, request, response) {
-  // Controller: validate input shape
-  const data = CreateUserSchema.parse(JSON.parse(body));
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+import { CreateUserSchema } from '../../schemas/users';
 
-  // Model will handle business rules
-  const user = await createUser(context, data);
+export const schema = z.object({
+  body: CreateUserSchema
+});
+
+export async function handler({ context, response, body }: Handler<typeof schema>) {
+  // Schema handles shape; model handles business rules
+  const user = await createUser(context, body);
+
+  response.statusCode = 201;
+  response.end(JSON.stringify(user));
 }
 
 export async function createUser(context, userData) {
@@ -273,9 +329,10 @@ export async function createUser(context, userData) {
 }
 ```
 
+
 ## The Router Layer
 
-### Why URLPattern?
+### Why String Patterns?
 
 ```javascript
 // Traditional string matching
@@ -283,19 +340,33 @@ if (request.url === '/users') { /* ... */ }
 if (request.url.startsWith('/users/')) { /* ... */ }
 if (request.url.match(/^\/users\/(\d+)$/)) { /* ... */ }
 
-// URLPattern - built into Node.js
-const pattern = new URLPattern({ pathname: '/users/:userId' });
-const match = pattern.exec(request.url);
-if (match) {
-  const userId = match.pathname.groups.userId;
+// String patterns with custom matching
+function matchRoute(pathname, routePattern) {
+  const pathSegments = pathname.split('/').filter(Boolean);
+  const patternSegments = routePattern.split('/').filter(Boolean);
+
+  if (pathSegments.length !== patternSegments.length) return null;
+
+  const params = {};
+  for (let i = 0; i < patternSegments.length; i++) {
+    const patternSegment = patternSegments[i];
+    const pathSegment = pathSegments[i];
+
+    if (patternSegment.startsWith(':')) {
+      params[patternSegment.slice(1)] = pathSegment;
+    } else if (patternSegment !== pathSegment) {
+      return null;
+    }
+  }
+  return params;
 }
 ```
 
-URLPattern is:
-- Built into Node.js (no dependencies)
-- Type-safe (TypeScript knows about groups)
-- Standard (works in browsers too)
-- Fast (C++ implementation)
+String patterns are:
+- Simple and readable
+- No external dependencies
+- Easy to understand and debug
+- Validated through Zod schemas
 
 ### Building Routes
 
@@ -303,16 +374,13 @@ URLPattern is:
 const routes = [
   {
     method: 'GET',
-    pattern: new URLPattern({ pathname: '/users/:userId' }),
-    handler: async (context, request, response, match) => {
-      const userId = match.pathname.groups.userId;
-      await getUserController(context, request, response, userId);
-    }
+    pattern: '/users/:userId',
+    controller: import('./controllers/users/[userId]/get')
   },
   {
     method: 'POST',
-    pattern: new URLPattern({ pathname: '/users' }),
-    handler: postUsersController
+    pattern: '/users',
+    controller: import('./controllers/users/post')
   }
 ];
 
@@ -320,10 +388,14 @@ const routes = [
 for (const route of routes) {
   if (route.method !== request.method) continue;
 
-  const match = route.pattern.exec(url);
-  if (!match) continue;
+  const matchedParams = matchRoute(pathname, route.pattern);
+  if (!matchedParams) continue;
 
-  await route.handler(context, request, response, match);
+  const controller = await route.controller;
+  const paramsSchema = controller.schema.shape?.params;
+  const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+
+  await controller.handler({ context, request, response, params });
   return;
 }
 ```
@@ -394,19 +466,28 @@ Controllers don't know about transactions. Models handle data consistency.
 **Authorization** → Controller (can they access this endpoint?)
 **Business Rules** → Model (do they meet requirements?)
 
-```javascript
+```typescript
 // Controller: Authentication & Authorization
-export async function deleteUserController(context, request, response, userId) {
+import { z } from 'zod';
+import type { Handler } from '../../createServer';
+
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid()
+  })
+});
+
+export async function handler({ context, request, response, params }: Handler<typeof schema>) {
   // Authentication: Who are you?
   const session = await requireSession(context, request);
 
   // Authorization: Can you access this endpoint?
-  if (!session.isAdmin && session.userId !== userId) {
+  if (!session.isAdmin && session.userId !== params.userId) {
     throw new ForbiddenError('Cannot delete other users');
   }
 
   // Model handles business rules
-  await deleteUser(context, userId, session.userId);
+  await deleteUser(context, params.userId, session.userId);
 
   response.statusCode = 204;
   response.end();
