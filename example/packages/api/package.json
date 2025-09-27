@@ -10,16 +10,22 @@
     "build": "tsc --build",
     "dev": "tsx watch src/main.ts",
     "start": "node --enable-source-maps dist/src/main.js",
-    "lint": "biome check src tests",
-    "test": "npm run build && node --test \"dist/tests/**/*.test.js\""
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "tidy": "npm run lint:fix && npm run format:fix && npm run check:fix"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "zod": "^4.1.11"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.8.3",
-    "@types/node": "^20.11.30",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "@biomejs/biome": "^2.2.4",
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
   }
 }
