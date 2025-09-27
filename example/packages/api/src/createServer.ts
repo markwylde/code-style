@@ -17,7 +17,6 @@ import type {
   Config,
   ControllerDefinition,
   ControllerSchema,
-  Route,
   ServerLifecycle,
 } from "./types.js";
 import { sendJson } from "./utils/http.js";
@@ -31,17 +30,15 @@ const documentedControllers = [
 
 type ZodObjectSchema = z.ZodObject<Record<string, z.ZodTypeAny>>;
 
-function buildRoutes(
-  controllers: readonly ControllerDefinition<ControllerSchema>[],
-): Route[] {
-  return controllers.map((controller) => ({
-    method: controller.schema.method,
-    pattern: new URLPattern({
-      pathname: toUrlPatternPath(controller.schema.path),
-    }),
-    controller,
-  }));
-}
+type InferParams<TSchema extends ControllerSchema> =
+  TSchema["params"] extends ZodObjectSchema
+    ? z.infer<TSchema["params"]>
+    : Record<string, never>;
+
+type InferQuery<TSchema extends ControllerSchema> =
+  TSchema["query"] extends ZodObjectSchema
+    ? z.infer<TSchema["query"]>
+    : Record<string, never>;
 
 function toUrlPatternPath(path: string): string {
   return path.replace(/\{([^}]+)\}/g, ":$1");
@@ -53,16 +50,6 @@ function normalizeRequestUrl(request: IncomingMessage, config: Config): URL {
     : `http://${config.host}:${config.port}`;
   return new URL(request.url ?? "/", origin);
 }
-
-type InferParams<TSchema extends ControllerSchema> =
-  TSchema["params"] extends ZodObjectSchema
-    ? z.infer<TSchema["params"]>
-    : Record<string, never>;
-
-type InferQuery<TSchema extends ControllerSchema> =
-  TSchema["query"] extends ZodObjectSchema
-    ? z.infer<TSchema["query"]>
-    : Record<string, never>;
 
 function parseParams<TSchema extends ControllerSchema>(
   controller: ControllerDefinition<TSchema>,
@@ -105,20 +92,6 @@ function parseQuery<TSchema extends ControllerSchema>(
   return result.data as InferQuery<TSchema>;
 }
 
-async function handleController<TSchema extends ControllerSchema>(
-  controller: ControllerDefinition<TSchema>,
-  context: AppContext,
-  request: IncomingMessage,
-  response: ServerResponse,
-  matchResult: URLPatternResult,
-  url: URL,
-) {
-  const params = parseParams(controller, matchResult);
-  const query = parseQuery(controller, url);
-
-  await controller.handler({ context, request, response, params, query });
-}
-
 export function createServer(options?: {
   config?: Config;
   contextFactory?: (configuration: Config) => Promise<AppContext>;
@@ -128,24 +101,31 @@ export function createServer(options?: {
     options?.contextFactory ??
     ((configuration) => buildContext({ config: configuration }));
 
-  const openApiController = createOpenApiController(documentedControllers);
-
-  const routes: Route[] = buildRoutes([
+  const controllers: ControllerDefinition<ControllerSchema>[] = [
     healthController,
     ...documentedControllers,
-    openApiController,
-  ]);
+    createOpenApiController(documentedControllers),
+  ];
+
+  const routes = controllers.map((controller) => ({
+    method: controller.schema.method,
+    pattern: new URLPattern({
+      pathname: toUrlPatternPath(controller.schema.path),
+    }),
+    controller,
+  }));
+
+  const httpServer = createHttpServer((nodeRequest, nodeResponse) => {
+    handleRequest(nodeRequest, nodeResponse).catch((error) => {
+      context?.logger.error("Request lifecycle failure", { error });
+      sendJson(nodeResponse, 500, {
+        error: "Internal server error",
+        code: "INTERNAL_ERROR",
+      });
+    });
+  });
 
   let context: AppContext | null = null;
-  let httpServer: ReturnType<typeof createHttpServer> | null = null;
-
-  async function ensureContext(): Promise<AppContext> {
-    if (!context) {
-      context = await contextFactory(config);
-    }
-
-    return context;
-  }
 
   async function handleRequest(
     request: IncomingMessage,
@@ -157,37 +137,53 @@ export function createServer(options?: {
       return;
     }
 
-    const activeContext = await ensureContext();
     const url = normalizeRequestUrl(request, config);
-    const route = routes.find(
-      (candidate) =>
-        candidate.method === request.method && candidate.pattern.test(url),
-    );
+    let matchedController: {
+      controller: ControllerDefinition<ControllerSchema>;
+      match: URLPatternResult;
+    } | null = null;
 
-    if (!route) {
+    for (const route of routes) {
+      if (route.method !== request.method) {
+        continue;
+      }
+
+      const matchResult = route.pattern.exec(url);
+      if (matchResult) {
+        matchedController = {
+          controller: route.controller,
+          match: matchResult,
+        };
+        break;
+      }
+    }
+
+    if (!matchedController) {
       response.writeHead(404);
       response.end();
       return;
     }
 
-    const matchResult = route.pattern.exec(url);
-    if (!matchResult) {
-      response.writeHead(404);
+    const activeContext = context;
+    if (!activeContext) {
+      response.writeHead(503);
       response.end();
       return;
     }
-
-    const controller = route.controller;
 
     try {
-      await handleController(
-        controller,
-        activeContext,
+      const params = parseParams(
+        matchedController.controller,
+        matchedController.match,
+      );
+      const query = parseQuery(matchedController.controller, url);
+      await matchedController.controller.handler({
+        context: activeContext,
         request,
         response,
-        matchResult,
-        url,
-      );
+        params,
+        query,
+      });
     } catch (error) {
       if (error instanceof ValidationError) {
         sendJson(response, error.statusCode, {
@@ -215,28 +211,14 @@ export function createServer(options?: {
   }
 
   async function start() {
-    if (httpServer) {
+    if (httpServer.listening) {
       return;
     }
 
     context = await contextFactory(config);
-    httpServer = createHttpServer((nodeRequest, nodeResponse) => {
-      handleRequest(nodeRequest, nodeResponse).catch((error) => {
-        context?.logger.error("Request lifecycle failure", { error });
-        sendJson(nodeResponse, 500, {
-          error: "Internal server error",
-          code: "INTERNAL_ERROR",
-        });
-      });
-    });
-
-    const activeServer = httpServer;
-    if (!activeServer) {
-      throw new Error("HTTP server failed to initialize");
-    }
 
     await new Promise<void>((resolve) => {
-      activeServer.listen(config.port, config.host, resolve);
+      httpServer.listen(config.port, config.host, resolve);
     });
 
     const address = httpServer.address();
@@ -249,12 +231,12 @@ export function createServer(options?: {
   }
 
   async function stop() {
-    if (!httpServer) {
+    if (!httpServer.listening) {
       return;
     }
 
     await new Promise<void>((resolve, reject) => {
-      httpServer?.close((error) => {
+      httpServer.close((error) => {
         if (error) {
           reject(error);
           return;
@@ -264,7 +246,6 @@ export function createServer(options?: {
       });
     });
 
-    httpServer = null;
     context = null;
   }
 
