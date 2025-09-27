@@ -291,7 +291,7 @@ Every server needs one:
 ```javascript
 routes.push({
   method: 'GET',
-  pattern: '/health',
+  pattern: new URLPattern({ pathname: '/health' }),
   schema: {},
   handler: async ({ context, response }) => {
     // Check critical dependencies
