@@ -313,6 +313,9 @@ routes.push({
   }
 });
 
+// Node's built-in URLPattern keeps exact-match endpoints like /health declarative
+// while still aligning with the wider routing guidance for typed controllers.
+
 async function checkDatabase(context) {
   try {
     await context.db.execute('SELECT 1');
