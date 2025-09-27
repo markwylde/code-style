@@ -2,8 +2,7 @@
 title: "The Context Pattern"
 tagline: "Pass an object. Skip the framework."
 subtitle: "Dependency Injection Without the Magic"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Architecture"
 tags: ["context", "dependency-injection", "testing"]
 order: 3

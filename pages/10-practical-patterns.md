@@ -2,11 +2,10 @@
 title: "Functional Composition"
 tagline: "Small functions. Big possibilities. Zero magic."
 subtitle: "Building Complex Systems from Simple Functions"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Patterns"
 tags: ["functional", "composition", "utilities", "patterns"]
-order: 9
+order: 10
 ---
 
 :::info

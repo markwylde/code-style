@@ -2,11 +2,10 @@
 title: "Dependencies: The Art of Saying No"
 tagline: "Every npm install is future debt."
 subtitle: "Why Every npm Package Is a Liability, Not an Asset"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Architecture"
 tags: ["dependencies", "minimalism", "maintenance", "npm"]
-order: 8
+order: 9
 ---
 
 :::warning

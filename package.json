@@ -8,22 +8,24 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "biome lint .",
-    "lint:fix": "biome lint --apply .",
+    "lint:fix": "biome lint --write .",
     "format": "biome format .",
-    "format:write": "biome format --write .",
+    "format:fix": "biome format --write .",
     "check": "biome check .",
-    "check:fix": "biome check --apply ."
+    "check:fix": "biome check --write .",
+    "tidy": "npm run lint:fix && npm run format:fix && npm run check:fix"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
-    "@types/react": "^19.1.13",
+    "@types/react": "^19.1.14",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
     "typescript": "^5.9.2",
-    "vite": "^7.1.6"
+    "vite": "^7.1.7"
   },
   "dependencies": {
     "highlight.js": "^11.11.1",
+    "html-react-parser": "^5.2.6",
     "marked": "^16.3.0",
     "marked-highlight": "^2.2.2",
     "react": "^19.1.1",

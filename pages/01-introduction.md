@@ -2,8 +2,7 @@
 title: "Introduction"
 tagline: "A practical, framework‑free Node.js blueprint"
 subtitle: "Build clear, testable systems with the context pattern"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Introduction"
 tags: ["functional", "nodejs", "architecture", "monorepo"]
 order: 1

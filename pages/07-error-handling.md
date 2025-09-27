@@ -2,11 +2,10 @@
 title: "Error Handling: Let It Bubble"
 tagline: "Errors aren't bugs. They're information."
 subtitle: "Why Catching Errors Everywhere Is Your Biggest Mistake"
-author: "Claude"
-date: "2024-12-25"
+date: "2025-04-03"
 category: "Error Management"
 tags: ["error-handling", "debugging", "nodejs", "architecture"]
-order: 6
+order: 7
 ---
 
 :::danger
