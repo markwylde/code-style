@@ -92,7 +92,7 @@ See: `Why Functional Node.js?` for the cost of magic and the benefits of clarity
 ## Quick Start (Adopting the Pattern)
 
 - Define `Config` and `Context` types; implement `createContext(config)` that constructs db/services and registers cleanup.
-- Build `createServer(context)` that wires routes with `URLPattern` and adds a `/health` readiness endpoint.
+- Build `createServer(context)` that loops over a route table of string patterns (e.g. `"/users/:userId"`), validates `schema.path` with Zod, and adds a `/health` readiness endpoint.
 - Write your first model (pure function, uses `context.db`) and controller (validates with zod, calls the model).
 - Add tests using Node’s built‑in runner; run against a real test database; mock only third‑party APIs.
 - Keep ports in config, no hard‑coded numbers; rely on lifecycle methods instead of arbitrary sleeps.
@@ -110,7 +110,7 @@ Read in order or jump to what you need:
 - Dependencies — minimal, intentional adoption
 - Practical Patterns — composition, services, and examples
 
-Each section includes copy‑pasteable snippets and concrete conventions (e.g., `controllers/users/[id]/get.ts`, URLPattern routing, zod schemas, Drizzle models). Start small, keep functions pure, and let the context do the wiring.
+Each section includes copy‑pasteable snippets and concrete conventions (e.g., `controllers/users/[id]/get.ts`, string-pattern routing with Zod validation, Drizzle models). Start small, keep functions pure, and let the context do the wiring.
 
 ## Next Up
 

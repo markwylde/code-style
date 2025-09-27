@@ -275,60 +275,82 @@ export async function createUser(context, userData) {
 
 ## The Router Layer
 
-### Why URLPattern?
+### String Patterns + Zod
 
-```javascript
-// Traditional string matching
-if (request.url === '/users') { /* ... */ }
-if (request.url.startsWith('/users/')) { /* ... */ }
-if (request.url.match(/^\/users\/(\d+)$/)) { /* ... */ }
+Controllers stay honest when the router is just data. Use literal path strings and Zod schemas so handlers receive typed path parameters.
 
-// URLPattern - built into Node.js
-const pattern = new URLPattern({ pathname: '/users/:userId' });
-const match = pattern.exec(request.url);
-if (match) {
-  const userId = match.pathname.groups.userId;
-}
-```
+```typescript
+import { z } from 'zod';
 
-URLPattern is:
-- Built into Node.js (no dependencies)
-- Type-safe (TypeScript knows about groups)
-- Standard (works in browsers too)
-- Fast (C++ implementation)
+const GetUserSchema = {
+  path: z.object({ userId: z.string().uuid() }),
+} as const;
 
-### Building Routes
-
-```javascript
 const routes = [
   {
     method: 'GET',
-    pattern: new URLPattern({ pathname: '/users/:userId' }),
-    handler: async (context, request, response, match) => {
-      const userId = match.pathname.groups.userId;
-      await getUserController(context, request, response, userId);
-    }
+    pattern: '/users/:userId',
+    schema: GetUserSchema,
+    handler: async ({ context, request, response, path }) => {
+      await getUserController(context, request, response, path.userId);
+    },
   },
   {
     method: 'POST',
-    pattern: new URLPattern({ pathname: '/users' }),
-    handler: postUsersController
-  }
+    pattern: '/users',
+    schema: {},
+    handler: ({ context, request, response }) =>
+      postUsersController(context, request, response),
+  },
 ];
 
-// Simple router
+function matchRoute(pathname: string, pattern: string) {
+  const pathSegments = pathname.split('/').filter(Boolean);
+  const patternSegments = pattern.split('/').filter(Boolean);
+
+  if (pathSegments.length !== patternSegments.length) return null;
+
+  const params: Record<string, string> = {};
+
+  for (let index = 0; index < patternSegments.length; index += 1) {
+    const patternSegment = patternSegments[index];
+    const pathSegment = pathSegments[index];
+
+    if (patternSegment.startsWith(':')) {
+      params[patternSegment.slice(1)] = pathSegment;
+    } else if (patternSegment !== pathSegment) {
+      return null;
+    }
+  }
+
+  return params;
+}
+
+const url = new URL(request.url ?? '', `http://${request.headers.host ?? 'localhost'}`);
+
 for (const route of routes) {
   if (route.method !== request.method) continue;
 
-  const match = route.pattern.exec(url);
-  if (!match) continue;
+  const pathParams = matchRoute(url.pathname, route.pattern);
+  if (!pathParams) continue;
 
-  await route.handler(context, request, response, match);
+  const pathSchema = route.schema?.path;
+  const parsed = pathSchema
+    ? pathSchema.safeParse(pathParams)
+    : { success: true, data: {} as Record<string, never> };
+
+  if (!parsed.success) {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ error: 'Invalid path parameters', issues: parsed.error.issues }));
+    return;
+  }
+
+  await route.handler({ context, request, response, path: parsed.data });
   return;
 }
 ```
 
-No framework. No magic. Just a loop.
+Still no framework. Still no magic. Just a loop that validates before handing control to the controller.
 
 ## Complex Operations
 

@@ -1,181 +1,300 @@
 ---
-title: "Routing with URLPattern"
-tagline: "Declarative paths. Predictable handlers."
-subtitle: "Building HTTP entrypoints without frameworks"
+title: "Routing"
+tagline: "String patterns. Typed paths. Zero magic."
+subtitle: "Building HTTP entrypoints with plain Node APIs"
 date: "2025-09-27"
 category: "Architecture"
-tags: ["routing", "urlpattern", "http", "controllers"]
+tags: ["routing", "zod", "http", "controllers"]
 order: 5
 ---
 
-:::tip
-**Routing Principle**
+# Routing
 
-Declare every route explicitly. Pair it with a controller file that performs only HTTP concerns. Let models and services own the rest.
-:::
+HTTP routing using explicit string patterns paired with Zod schemas for validation and type safety. No frameworks, no middleware magic—just clean, predictable request handling.
 
-## Why URLPattern
+## Core Architecture
 
-`URLPattern` is part of the Web Platform. It matches paths declaratively without custom regex helpers or framework routers.
-
-- **Explicit**: Each route describes its method and pattern in one object.
-- **Typed parameters**: Matches return named groups you can pass to controllers.
-- **Portable**: Works the same in Node and browser runtimes, making tests deterministic.
-- **Framework-free**: Keeps the codebase dependency-light, per the spec.
+### Handler Type System
 
 ```typescript
-export const routes = [
+import { z } from "zod";
+import type { Handler } from "../../../createServer";
+
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid(),
+  }),
+  body: z.object({
+    firstName: z.string(),
+    lastName: z.string(),
+  }),
+});
+
+export async function handler({ params, request, response }: Handler<typeof schema>) {
+  // params.userId is fully typed as string
+  // body validation happens automatically
+  const user = { id: params.userId };
+
+  response.setHeader("Content-Type", "application/json");
+  response.writeHead(200);
+  response.end(JSON.stringify(user));
+}
+```
+
+The `Handler<TSchema>` type extracts parameter and body types from your Zod schema, providing full type safety throughout your controllers.
+
+## Route Registration
+
+Routes are defined as dynamic imports with explicit patterns:
+
+```typescript
+const routes: Route[] = [
   {
     method: "GET",
-    pattern: new URLPattern({ pathname: "/users" }),
-    handler: usersController.get
-  },
-  {
-    method: "POST",
-    pattern: new URLPattern({ pathname: "/users" }),
-    handler: usersController.post
+    pattern: "/users",
+    controller: import("./controllers/users/get"),
   },
   {
     method: "GET",
-    pattern: new URLPattern({ pathname: "/users/:id" }),
-    handler: usersIdController.get
-  }
+    pattern: "/users/:userId",
+    controller: import("./controllers/users/[userId]/get"),
+  },
+  {
+    method: "PUT",
+    pattern: "/users/:userId",
+    controller: import("./controllers/users/[userId]/put"),
+  },
 ];
 ```
 
-## Route Tables, Not Switch Statements
+### File-Based Organization
 
-The HTTP server builds once and receives the immutable `routes` table. On every request, it searches for the first match.
+Controllers follow a predictable file structure that mirrors URL paths:
 
-```typescript
-export async function createServer(context) {
-  const routes = createRoutes(context);
-
-  const server = http.createServer(async (request, response) => {
-    const match = matchRoute(routes, request);
-    if (!match) return sendNotFound(response);
-
-    await match.handler({
-      context,
-      request,
-      response,
-      params: match.params
-    });
-  });
-
-  return { start: () => startServer(server, context), stop: () => stopServer(server) };
-}
-
-function matchRoute(routes, request) {
-  const method = request.method?.toUpperCase();
-  const url = new URL(request.url ?? "", `http://${request.headers.host}`);
-
-  for (const route of routes) {
-    if (route.method !== method) continue;
-    const result = route.pattern.exec(url);
-    if (!result) continue;
-    return {
-      handler: route.handler,
-      params: result.pathname?.groups ?? {}
-    };
-  }
-
-  return null;
-}
 ```
-
-This design keeps server lifecycle portable: the same `createServer` is used in tests and production, matching the spec's lifecycle rules.
-
-## Filesystem Mirrors the Router
-
-Route patterns mirror controller files:
-
-```text
 controllers/
 ├── users/
-│   ├── get.ts          → GET /users
-│   ├── post.ts         → POST /users
-│   └── [id]/
-│       ├── get.ts      → GET /users/:id
-│       └── post.ts     → POST /users/:id
+│   ├── get.ts              # GET /users
+│   ├── post.ts             # POST /users
+│   └── [userId]/
+│       ├── get.ts          # GET /users/:userId
+│       └── put.ts          # PUT /users/:userId
 └── posts/
-    └── get.ts          → GET /posts
+    ├── get.ts              # GET /posts
+    ├── post.ts             # POST /posts
+    └── [postId]/
+        ├── get.ts          # GET /posts/:postId
+        └── put.ts          # PUT /posts/:postId
 ```
 
-- Folder names represent static segments.
-- Bracketed folders `[id]` represent dynamic parameters.
-- File names map to HTTP verbs in lowercase.
+## Parameter Validation
 
-When a new controller file appears, add the corresponding entry to the routes table. Tests can assert the route exists by hitting the HTTP server rather than calling controller functions directly.
-
-## Working with Parameters
-
-`URLPattern` extracts named groups from the pathname. Controllers receive parameters already parsed; they do not repeat matching logic.
+Path parameters are automatically validated against your schema:
 
 ```typescript
-// routes/users.ts
-const usersIdPattern = new URLPattern({ pathname: "/users/:id" });
+// controllers/users/[userId]/get.ts
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid(),
+  }),
+});
 
-export const usersRoutes = [
-  {
-    method: "GET",
-    pattern: usersIdPattern,
-    handler: async ({ context, request, response, params }) => {
-      const { id } = params;
-      const user = await getUser(context, { id });
-      sendJsonValidated(response, 200, user, UserSchema);
-    }
+export async function handler({ context, params, response }: Handler<typeof schema>) {
+  // params.userId is guaranteed to be a valid UUID string
+  const user = await findUserById(context, params.userId);
+
+  if (!user) {
+    throw new NotFoundError('User not found');
   }
-];
-```
 
-- Convert path parameters to domain types inside controllers (numbers, UUID validation, etc.).
-- Query strings are read via `url.searchParams`—never by parsing `request.url` manually.
-- Controllers may throw domain errors; top-level error middleware handles translation into HTTP responses.
-
-## Nested Routers for Clarity
-
-Keep route definition modules small and composable. Each domain exports an array of route objects. The root router merges them.
-
-```typescript
-// routes/index.ts
-import { usersRoutes } from "./users";
-import { postsRoutes } from "./posts";
-
-export function createRoutes(context) {
-  return [
-    ...usersRoutes.map(route => ({ ...route, handler: route.handler.bind(null, context) })),
-    ...postsRoutes.map(route => ({ ...route, handler: route.handler.bind(null, context) }))
-  ];
+  response.setHeader('Content-Type', 'application/json');
+  response.writeHead(200);
+  response.end(JSON.stringify(user));
 }
 ```
 
-Route creation happens once per server lifecycle, satisfying the spec's requirement to reuse the same factory for tests and production. Controllers remain stateless functions operating on the provided context.
+Invalid parameters automatically return a 400 error before your handler runs.
 
-## Testing Routes End-to-End
+## Request Body Handling
 
-Tests should spin up the real HTTP server using `createServer` and make real HTTP requests. This verifies routing, controller wiring, and OpenAPI registration in one pass.
+Body validation is handled through the schema and a utility function:
 
 ```typescript
-it("GET /users/:id returns user", async () => {
-  const server = await createTestServer();
-  const response = await fetch(`${server.url}/users/${testUser.id}`);
+// controllers/users/[userId]/put.ts
+import { getBodyFromRequest } from "../../../utils/http";
 
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.id, testUser.id);
+export const schema = z.object({
+  params: z.object({
+    userId: z.string().uuid(),
+  }),
+  body: z.object({
+    firstName: z.string(),
+    lastName: z.string(),
+  }),
 });
+
+export async function handler({ context, params, request, response }: Handler<typeof schema>) {
+  const body = await getBodyFromRequest(request, schema);
+
+  const updatedUser = {
+    id: params.userId,
+    firstName: body.firstName,
+    lastName: body.lastName,
+  };
+
+  response.setHeader('Content-Type', 'application/json');
+  response.writeHead(200);
+  response.end(JSON.stringify(updatedUser));
+}
 ```
 
-- Avoid calling controller functions directly; that bypasses routing guarantees.
-- Seed data through models or fixtures so routes test real business flow.
+## Route Matching
 
-## Adding a New Route
+The `matchRoute` utility handles URL parameter extraction:
 
-1. Create the controller file in the correct folder structure.
-2. Define or reuse a `URLPattern` for the path.
-3. Register the controller in the route table with the correct HTTP method.
-4. Add end-to-end tests that hit the route via HTTP.
-5. Ensure OpenAPI registration lives inside the controller.
+```typescript
+export function matchRoute(pathname: string, routePattern: string): Record<string, string> | null {
+  const pathSegments = pathname.split('/').filter(Boolean);
+  const patternSegments = routePattern.split('/').filter(Boolean);
 
-Following this checklist keeps routing predictable, controllers thin, and models isolated—exactly what the spec demands.
+  if (pathSegments.length !== patternSegments.length) {
+    return null;
+  }
+
+  const params: Record<string, string> = {};
+
+  for (let index = 0; index < patternSegments.length; index += 1) {
+    const patternSegment = patternSegments[index];
+    const pathSegment = pathSegments[index];
+
+    if (patternSegment.startsWith(':')) {
+      params[patternSegment.slice(1)] = pathSegment;
+      continue;
+    }
+
+    if (patternSegment !== pathSegment) {
+      return null;
+    }
+  }
+
+  return params;
+}
+```
+
+## Server Implementation
+
+The server loops through routes, matches patterns, validates parameters, and dispatches to handlers:
+
+```typescript
+export function createServer(context: Context) {
+  return http.createServer(async (request, response) => {
+    const { pathname } = parse(request.url || "", true);
+
+    for (const route of routes) {
+      if (request.method !== route.method) continue;
+
+      const matchedParams = pathname ? matchRoute(pathname, route.pattern) : null;
+      if (!matchedParams) continue;
+
+      let controller: ControllerModule;
+      try {
+        controller = await route.controller;
+      } catch {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "Failed to load controller module" }));
+        return;
+      }
+
+      try {
+        const paramsSchema = (controller.schema as z.ZodObject<any>).shape?.params;
+        const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+
+        await controller.handler({
+          context,
+          request,
+          response,
+          params,
+          body: undefined,
+        });
+        return;
+      } catch (error) {
+        response.writeHead(400, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: error instanceof Error ? error.message : "Bad Request",
+          })
+        );
+        return;
+      }
+    }
+
+    response.writeHead(404, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Not Found" }));
+  });
+}
+```
+
+## Practical Examples
+
+### Simple List Endpoint
+
+```typescript
+// controllers/users/get.ts
+import { z } from "zod";
+import type { Handler } from "../../createServer";
+import { listUsers } from "../../models/users";
+
+export const schema = z.object({
+  params: z.object({}),
+});
+
+export async function handler({ context, response }: Handler<typeof schema>) {
+  const users = await listUsers(context, { limit: 50, offset: 0 });
+
+  response.setHeader('Content-Type', 'application/json');
+  response.writeHead(200);
+  response.end(JSON.stringify(users));
+}
+```
+
+### Resource Creation
+
+```typescript
+// controllers/users/post.ts
+import { z } from "zod";
+import type { Handler } from "../../createServer";
+import { getBodyFromRequest } from "../../utils/http";
+import { createUser } from "../../models/users";
+import { CreateUserSchema } from "../../schemas/users";
+
+export const schema = z.object({
+  params: z.object({}),
+  body: CreateUserSchema,
+});
+
+export async function handler({ context, request, response }: Handler<typeof schema>) {
+  const body = await getBodyFromRequest(request, schema);
+
+  const user = await createUser(context, body);
+
+  response.setHeader('Content-Type', 'application/json');
+  response.writeHead(201);
+  response.end(JSON.stringify(user));
+}
+```
+
+## Key Benefits
+
+**Type Safety**: Full TypeScript inference from Zod schemas to handler parameters
+
+**No Magic**: Explicit imports and clear request handling flow
+
+**Validation**: Automatic parameter and body validation with detailed error responses
+
+**Testing**: Easy to test individual handlers with mocked contexts
+
+**Performance**: Dynamic imports mean only loaded routes consume memory
+
+**Debugging**: Clear stack traces with no middleware layers to navigate
+
+This routing approach provides the power of frameworks while maintaining the simplicity and explicitness that makes Node.js applications maintainable.
