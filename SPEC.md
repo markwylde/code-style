@@ -385,7 +385,7 @@ export const postsRelations = relations(posts, ({ one }) => ({
 
 ### schemas/users.ts
 ```typescript
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 import { users } from '../db/schema';
 
@@ -1001,19 +1001,23 @@ export async function handler({ context, body, response }: Handler<typeof schema
 ### utils/http.ts
 ```typescript
 import { IncomingMessage } from 'http';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { ValidationError } from '../errors';
+import { ControllerSchema } from '../types';
 
 export function readBody(request: IncomingMessage) {
   return new Promise<string>((resolve, reject) => {
     let body = '';
-    request.on('data', chunk => body += chunk);
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      body += chunk;
+    });
     request.on('end', () => resolve(body));
     request.on('error', reject);
   });
 }
 
-export function parseJsonSafely(jsonString: string): any {
+export function parseJsonSafely(jsonString: string): unknown {
   try {
     return JSON.parse(jsonString);
   } catch {
@@ -1021,19 +1025,20 @@ export function parseJsonSafely(jsonString: string): any {
   }
 }
 
-export async function getBodyFromRequest<T extends z.ZodObject<any>>(
-  request: IncomingMessage,
-  schema: T
-): Promise<z.infer<T>["body"]> {
-  const rawBody = await readBody(request);
-  const parsedBody = parseJsonSafely(rawBody);
-  const bodySchema = schema.shape?.body;
-
-  if (!bodySchema) {
-    throw new ValidationError('No body schema defined');
+export async function getBodyFromRequest<
+  TSchema extends ControllerSchema & { body: { schema: z.ZodTypeAny } }
+>(request: IncomingMessage, schema: TSchema) {
+  if (!request.headers['content-type']?.includes(schema.body.contentType)) {
+    throw new ValidationError(`Unsupported content type. Expected ${schema.body.contentType}`);
   }
 
-  return bodySchema.parse(parsedBody);
+  const rawBody = await readBody(request);
+  if (rawBody.length === 0) {
+    throw new ValidationError('Request body is required');
+  }
+
+  const parsedBody = parseJsonSafely(rawBody);
+  return schema.body.schema.parse(parsedBody);
 }
 ```
 
@@ -1541,6 +1546,10 @@ export async function processPayment(
 
 ### 6. Testing Strategy
 
+The Node Test Runner `node:test` is now included in the latest stable version of node. Therefore we don't need to use any testing framework.
+
+Do not install a testing framework. The built in node test is good enough.
+
 #### What to Mock vs What Not to Mock
 
 **DO NOT MOCK (use real implementations):**
@@ -1863,26 +1872,21 @@ DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
 
 ### Controller Schema Exports
 
-Each controller should export an OpenAPI schema using `zod-to-openapi`:
+Each controller should export a `schema` object that mirrors the OpenAPI path definition while reusing the same Zod validators used for runtime validation:
 
 ```typescript
-import { z } from 'zod';
-import { createRouteSpec } from '@asteasolutions/zod-to-openapi';
+import { z } from 'zod/v4';
+import { ControllerDefinition, ControllerSchema, Handler } from '../../types';
 import { UserSchema } from '../../schemas/users';
 
-export const openApiSchema = createRouteSpec({
-  method: 'get',
+export const schema = {
+  method: 'GET',
   path: '/users/{userId}',
-  tags: ['Users'],
+  tags: ['Users'] as const,
   summary: 'Get user by ID',
-  request: {
-    params: z.object({
-      userId: z
-      .string()
-      .uuid({ message: 'Invalid user ID format' })
-      .openapi({ example: '550e8400-e29b-41d4-a716-446655440000' })
-    })
-  },
+  params: z.object({
+    userId: z.string().uuid({ message: 'Invalid user ID format' })
+  }),
   responses: {
     200: {
       description: 'User found',
@@ -1904,7 +1908,18 @@ export const openApiSchema = createRouteSpec({
       }
     }
   }
-});
+} as const satisfies ControllerSchema;
+
+type Schema = typeof schema;
+
+export const handler: Handler<Schema> = async ({ context, response, params }) => {
+  // ...handler logic
+};
+
+export const controller: ControllerDefinition<Schema> = {
+  schema,
+  handler,
+};
 ```
 
 ### OpenAPI Endpoint
@@ -1913,37 +1928,116 @@ Create an `/openapi` endpoint that collects all controller schemas:
 
 ```typescript
 // In createServer.ts
-import { OpenAPIGenerator } from '@asteasolutions/zod-to-openapi';
-import { z } from 'zod';
-import { openApiSchema as listUsersSchema } from './controllers/users/get';
-import { openApiSchema as createUserSchema } from './controllers/users/post';
-import { openApiSchema as getUserSchema } from './controllers/users/[userId]/get';
+import { z, toJSONSchema } from 'zod/v4';
+import { controller as listUsersController } from './controllers/users/get';
+import { controller as createUserController } from './controllers/users/post';
+import { controller as getUserController } from './controllers/users/[userId]/get';
 
-function generateOpenApiDocument() {
-  const generator = new OpenAPIGenerator(
-    [listUsersSchema, createUserSchema, getUserSchema],
-    '3.0.0',
-  );
+const documentedControllers = [
+  listUsersController,
+  createUserController,
+  getUserController,
+];
 
-  return generator.generateDocument({
-    openapi: '3.0.0',
+function zodObjectToParameters(
+  object: z.ZodObject<Record<string, z.ZodTypeAny>>,
+  location: 'path' | 'query',
+) {
+  const shape = object.shape;
+  return Object.entries(shape).map(([name, definition]) => ({
+    name,
+    in: location,
+    required: location === 'path' || !definition.isOptional?.(),
+    schema: toJSONSchema(definition),
+  }));
+}
+
+function generateOpenApiDocument(config: Config) {
+  const paths: Record<string, Record<string, unknown>> = {};
+
+  for (const { schema } of documentedControllers) {
+    const method = schema.method.toLowerCase();
+    const pathItem = paths[schema.path] ?? (paths[schema.path] = {});
+
+    const parameters = [
+      ...(schema.params ? zodObjectToParameters(schema.params, 'path') : []),
+      ...(schema.query ? zodObjectToParameters(schema.query, 'query') : []),
+    ];
+
+    const responses = Object.fromEntries(
+      Object.entries(schema.responses).map(([status, response]) => [
+        status,
+        {
+          description: response.description,
+          ...(response.content
+            ? {
+                content: {
+                  'application/json': {
+                    schema: toJSONSchema(response.content['application/json'].schema),
+                  },
+                },
+              }
+            : {}),
+        },
+      ]),
+    );
+
+    const requestBody = schema.body
+      ? {
+          description: schema.body.description,
+          required: schema.body.required ?? true,
+          content: {
+            [schema.body.contentType]: {
+              schema: toJSONSchema(schema.body.schema),
+            },
+          },
+        }
+      : undefined;
+
+    pathItem[method] = {
+      summary: schema.summary,
+      description: schema.description,
+      tags: schema.tags,
+      ...(parameters.length > 0 ? { parameters } : {}),
+      ...(requestBody ? { requestBody } : {}),
+      responses,
+    };
+  }
+
+  return {
+    openapi: '3.1.0',
     info: {
       version: '1.0.0',
       title: 'API Documentation',
       description: 'Generated API documentation',
     },
-    servers: [{ url: 'http://localhost:3000' }],
-  });
+    servers: [{ url: `http://${config.host}:${config.port}` }],
+    paths,
+  };
 }
 
 const openApiRoute: Route = {
   method: 'GET',
   pattern: new URLPattern({ pathname: '/openapi' }),
   controller: Promise.resolve({
-    schema: z.object({ params: z.object({}) }),
-    handler: async ({ response }) => {
+    schema: {
+      method: 'GET',
+      path: '/openapi',
+      params: z.object({}),
+      responses: {
+        200: {
+          description: 'OpenAPI document',
+          content: {
+            'application/json': {
+              schema: z.object({}).passthrough(),
+            },
+          },
+        },
+      },
+    },
+    handler: async ({ context, response }) => {
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify(generateOpenApiDocument()));
+      response.end(JSON.stringify(generateOpenApiDocument(context.config)));
     },
   }),
 };
@@ -1956,7 +2050,7 @@ const routes: Route[] = [
 
 ### Best Practices
 
-- Export `openApiSchema` from each controller file
+- Keep controller `schema` metadata in sync with the HTTP handler implementation
 - Use descriptive tags and summaries
 - Include example values for better documentation
 - Document all response codes including error cases

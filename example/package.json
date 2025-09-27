@@ -1,0 +1,16 @@
+{
+  "name": "notes-example",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "npm@11.6.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@notes/api",
+    "start": "npm run start --workspace=@notes/api",
+    "dev": "npm run dev --workspace=@notes/api",
+    "lint": "npm run lint --workspace=@notes/api",
+    "test": "npm run test --workspace=@notes/api"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@notes/api",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/src/main.js",
+  "exports": {
+    ".": "./dist/src/main.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsx watch src/main.ts",
+    "start": "node --enable-source-maps dist/src/main.js",
+    "lint": "biome check src tests",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\""
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.8.3",
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
