@@ -1,12 +1,16 @@
-import parse, {
-  type Element,
-  type HTMLReactParserOptions,
-} from "html-react-parser";
+import parse from "html-react-parser";
 import { marked } from "marked";
-import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
-import "./markdownExtensions";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import specMarkdown from "../SPEC.md?raw";
 import AboutPage from "./AboutPage";
+import { htmlParserOptions } from "./markdownExtensions";
 
 type Page = {
   id: string;
@@ -24,6 +28,9 @@ type ViewState = {
 };
 
 type SpecMode = "friendly" | "markdown";
+type Theme = "light" | "dark";
+
+const THEME_STORAGE_KEY = "codestyle-theme";
 
 const markdownModules = import.meta.glob("../pages/*.md", {
   eager: true,
@@ -31,26 +38,37 @@ const markdownModules = import.meta.glob("../pages/*.md", {
   import: "default",
 }) as Record<string, string>;
 
-const htmlParserOptions: HTMLReactParserOptions = {
-  replace(domNode) {
-    if (domNode.type === "script" || domNode.type === "style") {
-      return null;
+function readStoredTheme(): Theme | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") {
+      return stored;
     }
+  } catch {
+    // ignore storage errors (private mode, etc.)
+  }
+  return null;
+}
 
-    if (domNode.type === "tag") {
-      const element = domNode as Element;
-      if (element.attribs) {
-        for (const attributeName of Object.keys(element.attribs)) {
-          if (attributeName.toLowerCase().startsWith("on")) {
-            delete element.attribs[attributeName];
-          }
-        }
-      }
-    }
+function readSystemTheme(): Theme {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return "light";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
 
-    return undefined;
-  },
-};
+function resolveInitialTheme(): { theme: Theme; hasExplicit: boolean } {
+  const stored = readStoredTheme();
+  if (stored) {
+    return { theme: stored, hasExplicit: true };
+  }
+  return { theme: readSystemTheme(), hasExplicit: false };
+}
 
 function loadPages(): Page[] {
   return Object.entries(markdownModules)
@@ -206,6 +224,7 @@ function splitIntroFromContent(html: string): {
 
 export default function App(): JSX.Element {
   const pages = useMemo(() => loadPages(), []);
+  const [{ theme, hasExplicit }, setThemeInfo] = useState(resolveInitialTheme);
   const [view, setView] = useState<ViewState>(() =>
     parseHash(window.location.hash, pages),
   );
@@ -214,6 +233,69 @@ export default function App(): JSX.Element {
   const [specCopyState, setSpecCopyState] = useState<
     "idle" | "copied" | "error"
   >("idle");
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = theme;
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      if (hasExplicit) {
+        window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+      } else {
+        window.localStorage.removeItem(THEME_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }, [theme, hasExplicit]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      const matches = event.matches ?? mediaQuery.matches;
+      setThemeInfo((previous) => {
+        if (previous.hasExplicit) {
+          return previous;
+        }
+        return {
+          theme: matches ? "dark" : "light",
+          hasExplicit: false,
+        };
+      });
+    };
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+
+    if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(handleChange);
+      return () => mediaQuery.removeListener(handleChange);
+    }
+
+    return undefined;
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setThemeInfo((previous) => ({
+      theme: previous.theme === "dark" ? "light" : "dark",
+      hasExplicit: true,
+    }));
+  }, []);
+
+  const themeToggleLabel =
+    theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
 
   const activePage = useMemo(() => {
     if (view.section !== "guide") {
@@ -419,37 +501,61 @@ export default function App(): JSX.Element {
             </span>
             <h1>Code Style</h1>
           </div>
-          <nav className="header-nav" aria-label="Primary">
-            <ul>
-              <li>
-                <a
-                  href="#about"
-                  className={view.section === "about" ? "active" : ""}
-                  aria-current={view.section === "about" ? "page" : undefined}
-                >
-                  About
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#spec"
-                  className={view.section === "spec" ? "active" : ""}
-                  aria-current={view.section === "spec" ? "page" : undefined}
-                >
-                  The Spec
-                </a>
-              </li>
-              <li>
-                <a
-                  href={`#guide/${resolveGuideId(view.guideId, pages)}`}
-                  className={view.section === "guide" ? "active" : ""}
-                  aria-current={view.section === "guide" ? "page" : undefined}
-                >
-                  Guide
-                </a>
-              </li>
-            </ul>
-          </nav>
+          <div className="header-actions">
+            <nav className="header-nav" aria-label="Primary">
+              <ul>
+                <li>
+                  <a
+                    href="#about"
+                    className={view.section === "about" ? "active" : ""}
+                    aria-current={view.section === "about" ? "page" : undefined}
+                  >
+                    About
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href="#spec"
+                    className={view.section === "spec" ? "active" : ""}
+                    aria-current={view.section === "spec" ? "page" : undefined}
+                  >
+                    The Spec
+                  </a>
+                </li>
+                <li>
+                  <a
+                    href={`#guide/${resolveGuideId(view.guideId, pages)}`}
+                    className={view.section === "guide" ? "active" : ""}
+                    aria-current={view.section === "guide" ? "page" : undefined}
+                  >
+                    Guide
+                  </a>
+                </li>
+              </ul>
+            </nav>
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={themeToggleLabel}
+              aria-pressed={theme === "dark"}
+            >
+              <span className="theme-toggle-icon" aria-hidden="true">
+                {theme === "dark" ? (
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M21 12.79A9 9 0 0 1 11.21 3 7 7 0 0 0 12 17a7 7 0 0 0 9-4.21Z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12Zm0 4a1 1 0 0 1-1-1v-1.27a1 1 0 1 1 2 0V21a1 1 0 0 1-1 1Zm0-18a1 1 0 0 1-1-1V1a1 1 0 1 1 2 0v1a1 1 0 0 1-1 1Zm10 7h-1.27a1 1 0 1 1 0-2H22a1 1 0 1 1 0 2Zm-18 0H1a1 1 0 0 1 0-2h1.27a1 1 0 1 1 0 2Zm14.95 7.95a1 1 0 0 1-1.41 0l-.9-.9a1 1 0 1 1 1.42-1.41l.9.9a1 1 0 0 1 0 1.41Zm-11.31 0a1 1 0 0 1-1.41-1.41l.9-.9a1 1 0 0 1 1.41 1.41Zm0-11.31a1 1 0 0 1-1.41-1.41l.9-.9a1 1 0 1 1 1.41 1.41Zm11.31 0-.9-.9a1 1 0 1 1 1.41-1.41l.9.9a1 1 0 1 1-1.41 1.41Z" />
+                  </svg>
+                )}
+              </span>
+              <span className="theme-toggle-text">
+                {theme === "dark" ? "Dark" : "Light"}
+              </span>
+            </button>
+          </div>
         </div>
       </header>
       <main className={mainClassName}>
