@@ -1,0 +1,20 @@
+{
+  "files": {
+    "includes": [
+      "src/**",
+      "tests/**",
+      "package.json",
+      "tsconfig.json",
+      "biome.json"
+    ],
+    "ignoreUnknown": true
+  },
+  "linter": {
+    "enabled": true
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  }
+}
