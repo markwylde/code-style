@@ -4,7 +4,7 @@ tagline: "Declarative paths. Predictable handlers."
 subtitle: "Building HTTP entrypoints without frameworks"
 date: "2025-09-27"
 category: "Architecture"
-tags: ["routing", "string-patterns", "http", "controllers"]
+tags: ["routing", "urlpattern", "http", "controllers"]
 order: 5
 ---
 
@@ -14,30 +14,30 @@ order: 5
 Declare every route explicitly. Pair it with a controller file that performs only HTTP concerns. Let models and services own the rest.
 :::
 
-## Why String Patterns
+## Why URLPattern
 
-String patterns with `:param` syntax provide a simple, readable way to define routes. They're matched using a custom `matchRoute` utility that extracts parameters without external dependencies.
+`URLPattern` is built into modern Node.js releases and the browser runtime. Using it keeps routing declarative without rolling our own matchers.
 
-- **Explicit**: Each route describes its method and pattern in one object.
-- **Typed parameters**: Parameters are extracted and validated through Zod schemas.
-- **Simple**: No complex regex or external pattern matching libraries.
-- **Framework-free**: Keeps the codebase dependency-light, per the spec.
+- **Explicit**: Every route pairs an HTTP method with a `URLPattern` object.
+- **Typed parameters**: Captured groups surface as strongly typed properties in TypeScript.
+- **Zero dependencies**: No custom string parsing or regex utilities to maintain.
+- **Shared runtime**: The same route definitions work in edge runtimes and browser-based workers.
 
 ```typescript
 const routes: Route[] = [
   {
     method: "GET",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/get")
   },
   {
     method: "POST",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/post")
   },
   {
     method: "GET",
-    pattern: "/users/:userId",
+    pattern: new URLPattern({ pathname: "/users/:userId" }),
     controller: import("./controllers/users/[userId]/get")
   }
 ];
@@ -55,8 +55,8 @@ export function createServer(context: Context) {
     for (const route of routes) {
       if (request.method !== route.method) continue;
 
-      const matchedParams = pathname ? matchRoute(pathname, route.pattern) : null;
-      if (!matchedParams) continue;
+      const match = pathname ? route.pattern.exec({ pathname }) : null;
+      if (!match) continue;
 
       let controller: ControllerModule;
       try {
@@ -69,7 +69,8 @@ export function createServer(context: Context) {
 
       try {
         const paramsSchema = (controller.schema as z.ZodObject<any>).shape?.params;
-        const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+        const paramsGroups = match.pathname.groups as Record<string, string>;
+        const params = paramsSchema ? paramsSchema.parse(paramsGroups) : {};
 
         await controller.handler({
           context,
@@ -122,7 +123,7 @@ When a new controller file appears, add the corresponding entry to the routes ta
 
 ## Working with Parameters
 
-String patterns use `:param` syntax for dynamic segments. The `matchRoute` utility extracts parameters, and controllers validate them through Zod schemas.
+`URLPattern` uses the same familiar `:param` syntax. The pattern match returns a `pathname.groups` object that controllers validate through Zod schemas.
 
 ```typescript
 // controllers/users/[userId]/get.ts
@@ -162,17 +163,17 @@ Routes use dynamic imports to load controllers on-demand. Each controller export
 const routes: Route[] = [
   {
     method: "GET",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/get"),
   },
   {
     method: "POST",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/post"),
   },
   {
     method: "GET",
-    pattern: "/users/:userId",
+    pattern: new URLPattern({ pathname: "/users/:userId" }),
     controller: import("./controllers/users/[userId]/get"),
   }
 ];
@@ -203,7 +204,7 @@ it("GET /users/:id returns user", async () => {
 1. Create the controller file in the correct folder structure (e.g., `controllers/users/[userId]/get.ts`).
 2. Export a `schema` object with Zod validation for `params` and `body`.
 3. Export a `handler` function that receives validated data.
-4. Add the route to the routes array in `createServer.ts` with a string pattern.
+4. Add the route to the routes array in `createServer.ts` with a `URLPattern`.
 5. Add end-to-end tests that hit the route via HTTP.
 
 Following this checklist keeps routing predictable, controllers thin, and models isolated—exactly what the spec demands.

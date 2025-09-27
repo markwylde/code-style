@@ -108,7 +108,7 @@ Readiness and health:
 
 - Controllers live in files following `controllers/{entity}/{optionalSegment}/{method}.ts`, for example `controllers/users/[id]/get.ts`.
 - Controllers are thin HTTP adapters. They parse input, enforce authentication and authorization, call models and services, and shape HTTP responses. They contain no database logic.
-- HTTP routing uses string patterns with `:param` syntax for dynamic segments. Each route declares a method and pattern string, with parameters validated through Zod schemas in controllers.
+- HTTP routing uses `URLPattern` objects for declarative matching. Each route declares a method and `URLPattern`, and handlers receive parsed parameters from the pattern match.
 - Models encapsulate domain and data logic. They validate inputs relevant to the domain, perform all database access, apply invariants, and return plain data objects. They contain no HTTP concerns.
 - Controllers register OpenAPI via zod schemas and map domain data from models to the response. OpenAPI types describe the external shape; model types describe the internal domain.
 - Types used by models are defined with zod and inferred types near the model functions, or shared in `schemas/` when reused by multiple callers. Controllers import those types to validate I/O, but do not redefine domain types.
@@ -521,7 +521,6 @@ import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { parse } from 'node:url';
 import { z } from 'zod';
 import { Context } from './types';
-import { matchRoute } from './utils/matchRoute';
 
 type AnyZod = z.ZodTypeAny;
 
@@ -548,39 +547,39 @@ type ControllerModule<TSchema extends AnyZod = AnyZod> = {
 
 type Route = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  pattern: string | URLPattern;
+  pattern: URLPattern;
   controller: Promise<ControllerModule>;
 };
 
 const routes: Route[] = [
   {
     method: "GET",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/get"),
   },
   {
     method: "POST",
-    pattern: "/users",
+    pattern: new URLPattern({ pathname: "/users" }),
     controller: import("./controllers/users/post"),
   },
   {
     method: "GET",
-    pattern: "/users/:userId",
+    pattern: new URLPattern({ pathname: "/users/:userId" }),
     controller: import("./controllers/users/[userId]/get"),
   },
   {
     method: "PUT",
-    pattern: "/users/:userId",
+    pattern: new URLPattern({ pathname: "/users/:userId" }),
     controller: import("./controllers/users/[userId]/put"),
   },
   {
     method: "GET",
-    pattern: "/posts",
+    pattern: new URLPattern({ pathname: "/posts" }),
     controller: import("./controllers/posts/get"),
   },
   {
     method: "POST",
-    pattern: "/posts",
+    pattern: new URLPattern({ pathname: "/posts" }),
     controller: import("./controllers/posts/post"),
   },
   {
@@ -602,8 +601,8 @@ export function createServer(context: Context) {
     for (const route of routes) {
       if (request.method !== route.method) continue;
 
-      const matchedParams = pathname ? matchRoute(pathname, route.pattern) : null;
-      if (!matchedParams) continue;
+      const match = pathname ? route.pattern.exec({ pathname }) : null;
+      if (!match) continue;
 
       let controller: ControllerModule;
       try {
@@ -616,7 +615,8 @@ export function createServer(context: Context) {
 
       try {
         const paramsSchema = (controller.schema as z.ZodObject<any>).shape?.params;
-        const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+        const paramsGroups = match.pathname.groups as Record<string, string>;
+        const params = paramsSchema ? paramsSchema.parse(paramsGroups) : {};
 
         await controller.handler({
           context,
@@ -984,48 +984,14 @@ export async function getBodyFromRequest<T extends z.ZodObject<any>>(
 }
 ```
 
-### utils/matchRoute.ts
+### Using URLPattern
 ```typescript
-export function matchRoute(pathname: string, routePattern: string | URLPattern): Record<string, string> | null {
-  if (routePattern instanceof URLPattern) {
-    const match = routePattern.exec({ pathname });
-    if (!match) {
-      return null;
-    }
+const pattern = new URLPattern({ pathname: '/users/:userId' });
+const match = pattern.exec({ pathname });
 
-    const params: Record<string, string> = {};
-    for (const [key, value] of Object.entries(match.pathname.groups)) {
-      if (value !== undefined) {
-        params[key] = value;
-      }
-    }
-    return params;
-  }
-
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const patternSegments = routePattern.split('/').filter(Boolean);
-
-  if (pathSegments.length !== patternSegments.length) {
-    return null;
-  }
-
-  const params: Record<string, string> = {};
-
-  for (let index = 0; index < patternSegments.length; index += 1) {
-    const patternSegment = patternSegments[index];
-    const pathSegment = pathSegments[index];
-
-    if (patternSegment.startsWith(':')) {
-      params[patternSegment.slice(1)] = pathSegment;
-      continue;
-    }
-
-    if (patternSegment !== pathSegment) {
-      return null;
-    }
-  }
-
-  return params;
+if (match) {
+  const { userId } = match.pathname.groups;
+  // Use userId with full TypeScript support
 }
 ```
 

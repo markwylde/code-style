@@ -291,7 +291,7 @@ Every server needs one:
 ```javascript
 routes.push({
   method: 'GET',
-  pattern: '/health',
+  pattern: new URLPattern({ pathname: '/health' }),
   controller: Promise.resolve({
     schema: z.object({
       params: z.object({})
@@ -316,9 +316,6 @@ routes.push({
     }
   })
 });
-
-// String patterns keep exact-match endpoints like /health declarative
-// while still aligning with the wider routing guidance for typed controllers.
 
 async function checkDatabase(context) {
   try {
