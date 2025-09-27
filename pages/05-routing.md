@@ -1,5 +1,5 @@
 ---
-title: "Routing with String Patterns"
+title: "Routing"
 tagline: "Declarative paths. Predictable handlers."
 subtitle: "Building HTTP entrypoints without frameworks"
 date: "2025-09-27"

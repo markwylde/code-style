@@ -548,7 +548,7 @@ type ControllerModule<TSchema extends AnyZod = AnyZod> = {
 
 type Route = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  pattern: string;
+  pattern: string | URLPattern;
   controller: Promise<ControllerModule>;
 };
 
@@ -585,12 +585,12 @@ const routes: Route[] = [
   },
   {
     method: "GET",
-    pattern: "/posts/:postId",
+    pattern: new URLPattern({ pathname: "/posts/:postId" }),
     controller: import("./controllers/posts/[postId]/get"),
   },
   {
     method: "PUT",
-    pattern: "/posts/:postId",
+    pattern: new URLPattern({ pathname: "/posts/:postId" }),
     controller: import("./controllers/posts/[postId]/put"),
   },
 ];
@@ -986,7 +986,22 @@ export async function getBodyFromRequest<T extends z.ZodObject<any>>(
 
 ### utils/matchRoute.ts
 ```typescript
-export function matchRoute(pathname: string, routePattern: string): Record<string, string> | null {
+export function matchRoute(pathname: string, routePattern: string | URLPattern): Record<string, string> | null {
+  if (routePattern instanceof URLPattern) {
+    const match = routePattern.exec({ pathname });
+    if (!match) {
+      return null;
+    }
+
+    const params: Record<string, string> = {};
+    for (const [key, value] of Object.entries(match.pathname.groups)) {
+      if (value !== undefined) {
+        params[key] = value;
+      }
+    }
+    return params;
+  }
+
   const pathSegments = pathname.split('/').filter(Boolean);
   const patternSegments = routePattern.split('/').filter(Boolean);
 
