@@ -11,7 +11,7 @@ order: 7
 :::danger
 **The Try-Catch Epidemic**
 
-Look at most Node.js codebases and you'll see this pattern—try-catch blocks everywhere, swallowing errors and losing crucial debugging information.
+Look at most Node.js codebases and you'll see this pattern, try-catch blocks everywhere, swallowing errors and losing crucial debugging information.
 :::
 
 Look at most Node.js codebases and you'll see this pattern:
@@ -164,44 +164,35 @@ export function createServer(context) {
 }
 
 function handleError(error, response) {
-  // AppErrors get their specific status codes
+  if (error instanceof ZodError) {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      error: 'Validation failed',
+      code: 'VALIDATION_ERROR',
+      details: error.issues,
+    }));
+    return;
+  }
+
   if (error instanceof AppError) {
-    response.statusCode = error.statusCode;
+    response.writeHead(error.statusCode, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({
       error: error.message,
       code: error.code,
-      ...(error instanceof ValidationError && error.details ?
-        { details: error.details } : {}
-      )
+      ...(error instanceof ValidationError && error.details ? { details: error.details } : {}),
     }));
     return;
   }
 
-  // Zod validation errors become 400s
-  if (error instanceof ZodError) {
-    response.statusCode = 400;
-    response.end(JSON.stringify({
-      error: 'Validation failed',
-      details: error.errors
-    }));
+  if (error?.code === '23505') {
+    response.writeHead(409, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ error: 'Resource already exists', code: 'CONFLICT' }));
     return;
   }
 
-  // Database constraint violations
-  if (error.code === '23505') {  // PostgreSQL unique violation
-    response.statusCode = 409;
-    response.end(JSON.stringify({
-      error: 'Resource already exists'
-    }));
-    return;
-  }
-
-  // Everything else is a 500
   console.error('Unhandled error:', error);
-  response.statusCode = 500;
-  response.end(JSON.stringify({
-    error: 'Internal server error'
-  }));
+  response.writeHead(500, { 'Content-Type': 'application/json' });
+  response.end(JSON.stringify({ error: 'Internal server error', code: 'INTERNAL_SERVER_ERROR' }));
 }
 ```
 
@@ -507,5 +498,3 @@ One error handler instead of try-catch everywhere.
 When something fails, the caller knows about it.
 
 Remember: **Errors are not enemies to be suppressed. They're information about what went wrong.** Let them bubble up to where they can be handled properly.
-
-Next, we'll explore testing philosophy—why mocking your database is over the top but mocking Twilio is smart.

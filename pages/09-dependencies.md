@@ -112,25 +112,6 @@ const apiFetch = async (url, options = {}) => {
 };
 ```
 
-### You Don't Need Moment.js
-
-```javascript
-// You think you need moment
-import moment from 'moment';  // 67KB minified!
-const formatted = moment().format('YYYY-MM-DD');
-
-// You don't
-const formatted = new Date().toISOString().split('T')[0];
-
-// Need more? Use the built-in Intl
-const formatter = new Intl.DateTimeFormat('en-US', {
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric'
-});
-formatted = formatter.format(new Date());  // "December 25, 2024"
-```
-
 ### You Don't Need Express
 
 ```javascript
@@ -149,7 +130,7 @@ const routes = [
   {
     method: 'GET',
     pattern: '/users/:id',
-    controller: import('./controllers/users/[id]/get')
+    controller: import('./controllers/users/[userId]/get')
   }
 ];
 
@@ -510,5 +491,3 @@ The dependency philosophy:
 5. **Question everything**: "Industry standard" means nothing
 
 Remember: The best dependency is no dependency. The second best is one you can understand, vendor, or replace. Everything else is technical debt you're adding to your project.
-
-Next, we'll explore practical patterns—how to build complex functionality from simple, composable functions.

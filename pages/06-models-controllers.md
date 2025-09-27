@@ -542,6 +542,4 @@ The model-controller separation is simple:
 - **Never** let models know about HTTP
 - **Always** keep the layers separate
 
-It's more code upfront—you write both a controller and a model instead of one fat controller. But when your application grows, you'll thank yourself for keeping the layers clean.
-
-Next, we'll explore error handling—why we let errors bubble up instead of catching them everywhere.
+It's more code upfront, you write both a controller and a model instead of one fat controller. But when your application grows, you'll thank yourself for keeping the layers clean.

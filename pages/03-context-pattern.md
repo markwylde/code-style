@@ -8,8 +8,6 @@ tags: ["context", "dependency-injection", "testing"]
 order: 3
 ---
 
-## The Problem with Global State
-
 :::danger
 **Global State = Global Pain**
 
@@ -63,7 +61,7 @@ export async function createUser(context, userData) {
 :::success
 **The Context Advantage**
 
-Context isn't just a pattern—it's a complete philosophy shift. Instead of magic happening behind the scenes, everything is explicit, testable, and debuggable.
+Context isn't just a pattern, it's a complete philosophy shift. Instead of magic happening behind the scenes, everything is explicit, testable, and debuggable.
 :::
 
 ### 1. **Testing Becomes Trivial**
@@ -83,7 +81,7 @@ it('should create user without sending email in tests', async () => {
 });
 ```
 
-No dependency injection framework. No magic decorators. Just a plain object.
+No dependency injection framework. No magic decorators. Just a plain, typed object.
 
 ### 2. **Dependencies Are Explicit**
 
@@ -372,5 +370,3 @@ The context pattern gives you:
 - **Flexibility**: Override parts of context as needed
 
 It's dependency injection at its simplest: passing an object to a function. No frameworks, no decorators, no magic. Just functions and parameters, the way JavaScript was meant to be written.
-
-Next, we'll see how this context pattern enables bulletproof server lifecycle management—servers that start cleanly, restart reliably, and shut down gracefully.

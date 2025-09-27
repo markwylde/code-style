@@ -31,10 +31,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build site
+      - name: Detect base path
         run: |
-          # Set Vite base path for project pages: /<repo>/
-          npm run build -- --base=/${{ github.event.repository.name }}/
+          REPO="${{ github.event.repository.name }}"
+          OWNER="${{ github.repository_owner }}"
+          if [[ "$REPO" == "${OWNER}.github.io" ]]; then
+            echo "BASE=/" >> $GITHUB_ENV
+          else
+            echo "BASE=/${REPO}/" >> $GITHUB_ENV
+          fi
+
+      - name: Build site
+        run: npm run build -- --base="$BASE"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

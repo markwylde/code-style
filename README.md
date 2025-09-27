@@ -10,7 +10,7 @@ This project provides an interactive documentation site that presents the NodeJS
 
 - **Interactive Documentation**: Browse through chapters covering different aspects of Node.js development
 - **The Spec**: A complete specification document for building Node.js applications with the context pattern
-- **Friendly & Raw Views**: Toggle between formatted documentation and raw markdown for easy copying
+- **Spec View Toggle**: On the Spec page, switch between the friendly renderer and raw markdown for easy copying
 - **Responsive Design**: Works seamlessly on desktop and mobile devices
 - **Syntax Highlighting**: Code examples are properly highlighted for better readability
 

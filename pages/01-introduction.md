@@ -10,9 +10,9 @@ order: 1
 
 ## What This Is
 
-This guide is a pragmatic blueprint for building production‑grade Node.js systems without a heavyweight framework. It shows how to structure an application as a set of small, focused functions that all take an explicit context object, keeping dependencies clear and testing easy. You get strong lifecycle guarantees, type‑safe boundaries, and minimal magic.
+This guide is a walkthrough for building production‑grade Node.js systems without a heavyweight framework. It shows how to structure an application as a set of small, focused functions that all take an explicit context object, keeping dependencies clear and testing easy. You get strong lifecycle guarantees, type‑safe boundaries, and minimal magic.
 
-Instead of wiring a pile of middleware and hoping for the best, you’ll learn a consistent approach that scales: a portable server lifecycle, thin HTTP controllers, model‑centric data logic, and explicit external services — all stitched together through a typed context.
+Instead of wiring a pile of middleware and hoping for the best, you’ll learn a consistent approach that scales: a portable server lifecycle, thin HTTP controllers, model‑centric data logic, and explicit external services, all stitched together through a typed context.
 
 ## Who It’s For
 
@@ -79,7 +79,7 @@ export async function createUser(context, data) {
 
 ## Why Not a Framework?
 
-Frameworks promise convenience but trade away visibility and control. Middleware mutates shared objects, magic hides flow, and upgrades become risky. Here, every step is explicit and testable. When something breaks, you debug your code — not a stack of plugins.
+Frameworks promise convenience but trade away visibility and control. Middleware mutates shared objects, magic hides flow, and upgrades become risky. Here, every step is explicit and testable. When something breaks, you debug your code, not a stack of plugins.
 
 See: `Why Functional Node.js?` for the cost of magic and the benefits of clarity.
 
@@ -88,30 +88,3 @@ See: `Why Functional Node.js?` for the cost of magic and the benefits of clarity
 - Not a DI container or annotation framework
 - Not server‑side rendering — React UIs are compiled to static assets
 - Not a one‑size‑fits‑all toolkit — it’s a set of composable patterns
-
-## Quick Start (Adopting the Pattern)
-
-- Define `Config` and `Context` types; implement `createContext(config)` that constructs db/services and registers cleanup.
-- Build `createServer(context)` that wires routes with `URLPattern` and adds a `/health` readiness endpoint.
-- Write your first model (pure function, uses `context.db`) and controller (validates with zod, calls the model).
-- Add tests using Node’s built‑in runner; run against a real test database; mock only third‑party APIs.
-- Keep ports in config, no hard‑coded numbers; rely on lifecycle methods instead of arbitrary sleeps.
-
-## How to Use This Guide
-
-Read in order or jump to what you need:
-
-- Why Functional Node.js — motivation and trade‑offs
-- The Context Pattern — dependency injection without magic
-- Server Lifecycle — start/stop/restart guarantees and health
-- Models & Controllers — clean, testable boundaries
-- Error Handling — bubble errors; translate at HTTP edge
-- Testing Philosophy — what to mock (and what not to)
-- Dependencies — minimal, intentional adoption
-- Practical Patterns — composition, services, and examples
-
-Each section includes copy‑pasteable snippets and concrete conventions (e.g., `controllers/users/[id]/get.ts`, URLPattern routing, zod schemas, Drizzle models). Start small, keep functions pure, and let the context do the wiring.
-
-## Next Up
-
-Head to `Why Functional Node.js?` to see the problems this architecture solves and the benefits you’ll gain by adopting it.

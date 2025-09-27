@@ -48,56 +48,99 @@ const routes: Route[] = [
 The HTTP server builds once and receives the immutable `routes` table. On every request, it searches for the first match.
 
 ```typescript
+function handleError(error: unknown, response: http.ServerResponse) {
+  if (error instanceof z.ZodError) {
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        error: "Validation failed",
+        code: "VALIDATION_ERROR",
+        details: error.issues,
+      }),
+    );
+    return;
+  }
+
+  if (error instanceof AppError) {
+    response.writeHead(error.statusCode, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        error: error.message,
+        code: error.code,
+      }),
+    );
+    return;
+  }
+
+  console.error("Unhandled error", error);
+  response.writeHead(500, { "Content-Type": "application/json" });
+  response.end(
+    JSON.stringify({
+      error: "Internal server error",
+      code: "INTERNAL_SERVER_ERROR",
+    }),
+  );
+}
+
 export function createServer(context: Context) {
   return http.createServer(async (request, response) => {
-    const { pathname } = parse(request.url || "", true);
-
-    for (const route of routes) {
-      if (request.method !== route.method) continue;
-
-      const match = pathname ? route.pattern.exec({ pathname }) : null;
-      if (!match) continue;
-
-      let controller: ControllerModule;
-      try {
-        controller = await route.controller;
-      } catch {
-        response.writeHead(500, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ error: "Failed to load controller module" }));
+    try {
+      if (!request.url) {
+        response.writeHead(400, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "Invalid request URL", code: "INVALID_REQUEST" }));
         return;
       }
 
-      try {
-        const paramsSchema = (controller.schema as z.ZodObject<any>).shape?.params;
-        const paramsGroups = match.pathname.groups as Record<string, string>;
-        const params = paramsSchema ? paramsSchema.parse(paramsGroups) : {};
+      const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+      const pathname = url.pathname;
+
+      for (const route of routes) {
+        if (request.method !== route.method) continue;
+
+        const match = route.pattern.exec({ pathname });
+        if (!match) continue;
+
+        const controller = await route.controller;
+        const schema = controller.schema as z.ZodObject<any> | undefined;
+        const paramsSchema = schema?.shape?.params as z.ZodTypeAny | undefined;
+        const querySchema = schema?.shape?.query as z.ZodTypeAny | undefined;
+        const bodySchema = schema?.shape?.body as z.ZodTypeAny | undefined;
+
+        const params = paramsSchema
+          ? paramsSchema.parse(match.pathname.groups ?? {})
+          : {};
+
+        const query = querySchema
+          ? querySchema.parse(Object.fromEntries(url.searchParams.entries()))
+          : {};
+
+        let body: unknown = undefined;
+        if (bodySchema) {
+          const rawBody = await readBody(request);
+          body = bodySchema.parse(parseJsonSafely(rawBody));
+        }
 
         await controller.handler({
           context,
           request,
           response,
           params,
-          body: undefined,
+          query,
+          body,
         });
         return;
-      } catch (error) {
-        response.writeHead(400, { "Content-Type": "application/json" });
-        response.end(
-          JSON.stringify({
-            error: error instanceof Error ? error.message : "Bad Request",
-          })
-        );
-        return;
       }
-    }
 
-    response.writeHead(404, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "Not Found" }));
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Not Found", code: "NOT_FOUND" }));
+    } catch (error) {
+      handleError(error, response);
+    }
   });
 }
 ```
 
-This design keeps server lifecycle portable: the same `createServer` is used in tests and production, matching the spec's lifecycle rules.
+`handleError` keeps HTTP translations consistent: validation issues become `400 VALIDATION_ERROR` responses and domain-specific `AppError`s preserve their status codes. This design keeps server lifecycle portable: the same `createServer` is used in tests and production, matching the spec's lifecycle rules.
 
 ## Filesystem Mirrors the Router
 
@@ -108,7 +151,7 @@ controllers/
 ├── users/
 │   ├── get.ts          → GET /users
 │   ├── post.ts         → POST /users
-│   └── [id]/
+│   └── [userId]/
 │       ├── get.ts      → GET /users/:id
 │       └── post.ts     → POST /users/:id
 └── posts/
@@ -116,7 +159,7 @@ controllers/
 ```
 
 - Folder names represent static segments.
-- Bracketed folders `[id]` represent dynamic parameters.
+- Bracketed folders like `[userId]` represent dynamic parameters.
 - File names map to HTTP verbs in lowercase.
 
 When a new controller file appears, add the corresponding entry to the routes table. Tests can assert the route exists by hitting the HTTP server rather than calling controller functions directly.
@@ -133,7 +176,7 @@ import { findUserById } from '../../../models/users';
 
 export const schema = z.object({
   params: z.object({
-    userId: z.string().uuid(),
+    userId: z.string().uuid({ message: "Invalid user ID format" }),
   }),
 });
 
@@ -151,7 +194,7 @@ export async function handler({ context, params, response }: Handler<typeof sche
 ```
 
 - Convert path parameters to domain types inside controllers (numbers, UUID validation, etc.).
-- Query strings are read via `url.searchParams`—never by parsing `request.url` manually.
+- The router parses query parameters via `schema.query` and passes them to controllers; controllers never touch `request.url` directly.
 - Controllers may throw domain errors; top-level error middleware handles translation into HTTP responses.
 
 ## Dynamic Imports for Controllers
@@ -207,4 +250,4 @@ it("GET /users/:id returns user", async () => {
 4. Add the route to the routes array in `createServer.ts` with a `URLPattern`.
 5. Add end-to-end tests that hit the route via HTTP.
 
-Following this checklist keeps routing predictable, controllers thin, and models isolated—exactly what the spec demands.
+Following this checklist keeps routing predictable, controllers thin, and models isolated, exactly what the spec demands.

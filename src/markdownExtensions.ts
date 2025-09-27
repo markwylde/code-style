@@ -3,6 +3,7 @@ import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import plaintext from "highlight.js/lib/languages/plaintext";
 import typescript from "highlight.js/lib/languages/typescript";
+import type { Element, HTMLReactParserOptions } from "html-react-parser";
 import { marked, type Tokens } from "marked";
 import { markedHighlight } from "marked-highlight";
 
@@ -33,6 +34,61 @@ interface AccordionItem {
 const CALLOUT_PATTERN =
   /^:::(callout|info|warning|danger|success|tip|caution)(?:[ \t]*\n)?([\s\S]+?)\n:::(?:\n|$)/;
 const ACCORDION_PATTERN = /^:::accordion\s*\n([\s\S]+?)\n:::(?:\n|$)/;
+
+const DISALLOWED_HTML_TAGS = new Set([
+  "script",
+  "style",
+  "iframe",
+  "object",
+  "embed",
+  "link",
+  "meta",
+  "base",
+  "form",
+]);
+
+export const htmlParserOptions: HTMLReactParserOptions = {
+  replace(domNode) {
+    if (domNode.type === "script" || domNode.type === "style") {
+      return null;
+    }
+
+    if (domNode.type === "tag") {
+      const element = domNode as Element;
+      if (DISALLOWED_HTML_TAGS.has(element.name)) {
+        return null;
+      }
+
+      if (element.attribs) {
+        for (const [attributeName, value] of Object.entries(element.attribs)) {
+          if (attributeName.toLowerCase().startsWith("on")) {
+            delete element.attribs[attributeName];
+            continue;
+          }
+
+          if (attributeName === "href" || attributeName === "src") {
+            const normalized = value?.trim().toLowerCase();
+            if (!normalized) {
+              continue;
+            }
+
+            const isJavascript =
+              normalized.startsWith("javascript:") ||
+              normalized.startsWith("vbscript:");
+            const isUnsafeData =
+              normalized.startsWith("data:") &&
+              !normalized.startsWith("data:image/");
+            if (isJavascript || isUnsafeData) {
+              delete element.attribs[attributeName];
+            }
+          }
+        }
+      }
+    }
+
+    return undefined;
+  },
+};
 
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("json", json);
@@ -284,7 +340,7 @@ function normalizeLeadingText(element: HTMLElement): void {
   const firstChild = element.firstChild;
   if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
     const textNode = firstChild;
-    const cleaned = textNode.textContent?.replace(/^[\s:–—-]+/, "") ?? "";
+    const cleaned = textNode.textContent?.replace(/^[\s:–, -]+/, "") ?? "";
     if (cleaned) {
       textNode.textContent = cleaned;
     } else {
