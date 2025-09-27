@@ -13,7 +13,7 @@ order: 8
 :::danger
 **The Mock Trap**
 
-Unit tests with mocks everywhere don't test your actual code—they test that your mocks work. When your real database enforces constraints your mock ignores, guess which one your users encounter?
+Unit tests with mocks everywhere don't test your actual code, they test that your mocks work. When your real database enforces constraints your mock ignores, guess which one your users encounter?
 :::
 
 You've seen this pattern a thousand times:
@@ -562,5 +562,3 @@ The testing philosophy is simple:
 5. **Optimize for debugging time, not test execution time**
 
 When your tests use real dependencies, they catch real bugs. When they catch real bugs, you ship reliable software. When you ship reliable software, you sleep better at night.
-
-Next, we'll explore dependencies—why every npm package you add is a liability, not an asset.

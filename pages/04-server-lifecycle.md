@@ -55,7 +55,7 @@ Each operation has guarantees:
 :::warning
 **Ignoring Lifecycle = Production Nightmares**
 
-Every server without proper lifecycle management is a ticking time bomb. Memory leaks, hanging connections, and zombie processes are not edge cases—they're guaranteed outcomes.
+Every server without proper lifecycle management is a ticking time bomb. Memory leaks, hanging connections, and zombie processes are not edge cases, they're guaranteed outcomes.
 :::
 
 ### 1. **Memory Leaks Are Real**
@@ -423,5 +423,3 @@ Proper server lifecycle gives you:
 - **Production stability**: Predictable behavior under load
 
 It's more code upfront, but it prevents countless hours of debugging mysterious test failures, memory leaks, and production incidents.
-
-Next, we'll explore how models and controllers achieve true separation of concerns—why your HTTP layer should never touch your database.
