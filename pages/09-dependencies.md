@@ -144,66 +144,29 @@ app.get('/users/:id', (request, response) => {
 
 // You don't - Node has everything
 import { createServer } from 'http';
-import { z } from 'zod';
 
 const routes = [
   {
-    method: 'GET',
-    pattern: '/users/:id',
-    schema: {
-      path: z.object({ id: z.string() })
-    },
-    handler: ({ path, response }) => {
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify({ id: path.id }));
+    pattern: new URLPattern({ pathname: '/users/:id' }),
+    handler: async (request, response, match) => {
+      response.end(JSON.stringify({
+        id: match.pathname.groups.id
+      }));
     }
   }
 ];
 
-function matchRoute(pathname, routePattern) {
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const patternSegments = routePattern.split('/').filter(Boolean);
-
-  if (pathSegments.length !== patternSegments.length) return null;
-
-  const params = {};
-  for (let index = 0; index < patternSegments.length; index += 1) {
-    const patternSegment = patternSegments[index];
-    const pathSegment = pathSegments[index];
-
-    if (patternSegment.startsWith(':')) {
-      params[patternSegment.slice(1)] = pathSegment;
-    } else if (patternSegment !== pathSegment) {
-      return null;
-    }
-  }
-
-  return params;
-}
-
 createServer((request, response) => {
-  const { pathname = '/' } = new URL(request.url, `http://${request.headers.host}`);
+  const url = new URL(request.url, `http://${request.headers.host}`);
 
   for (const route of routes) {
-    if (request.method !== route.method) continue;
-
-    const pathParams = matchRoute(pathname, route.pattern);
-    if (!pathParams) continue;
-
-    const parsed = route.schema?.path
-      ? route.schema.path.safeParse(pathParams)
-      : { success: true, data: {} };
-
-    if (!parsed.success) {
-      response.writeHead(400, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ error: 'Invalid path parameters', issues: parsed.error.issues }));
-      return;
+    const match = route.pattern.exec(url);
+    if (match) {
+      return route.handler(request, response, match);
     }
-
-    return route.handler({ path: parsed.data, response });
   }
 
-  response.writeHead(404, { 'Content-Type': 'text/plain' });
+  response.statusCode = 404;
   response.end('Not found');
 }).listen(3000);
 ```
