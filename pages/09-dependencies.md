@@ -147,23 +147,25 @@ import { createServer } from 'http';
 
 const routes = [
   {
-    pattern: new URLPattern({ pathname: '/users/:id' }),
-    handler: async (request, response, match) => {
-      response.end(JSON.stringify({
-        id: match.pathname.groups.id
-      }));
-    }
+    method: 'GET',
+    pattern: '/users/:id',
+    controller: import('./controllers/users/[id]/get')
   }
 ];
 
-createServer((request, response) => {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+createServer(async (request, response) => {
+  const { pathname } = parse(request.url || '', true);
 
   for (const route of routes) {
-    const match = route.pattern.exec(url);
-    if (match) {
-      return route.handler(request, response, match);
-    }
+    if (request.method !== route.method) continue;
+
+    const matchedParams = matchRoute(pathname, route.pattern);
+    if (!matchedParams) continue;
+
+    const controller = await route.controller;
+    const params = controller.schema.shape?.params?.parse(matchedParams) || {};
+
+    return controller.handler({ request, response, params });
   }
 
   response.statusCode = 404;

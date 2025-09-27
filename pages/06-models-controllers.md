@@ -275,7 +275,7 @@ export async function createUser(context, userData) {
 
 ## The Router Layer
 
-### Why URLPattern?
+### Why String Patterns?
 
 ```javascript
 // Traditional string matching
@@ -283,19 +283,33 @@ if (request.url === '/users') { /* ... */ }
 if (request.url.startsWith('/users/')) { /* ... */ }
 if (request.url.match(/^\/users\/(\d+)$/)) { /* ... */ }
 
-// URLPattern - built into Node.js
-const pattern = new URLPattern({ pathname: '/users/:userId' });
-const match = pattern.exec(request.url);
-if (match) {
-  const userId = match.pathname.groups.userId;
+// String patterns with custom matching
+function matchRoute(pathname, routePattern) {
+  const pathSegments = pathname.split('/').filter(Boolean);
+  const patternSegments = routePattern.split('/').filter(Boolean);
+
+  if (pathSegments.length !== patternSegments.length) return null;
+
+  const params = {};
+  for (let i = 0; i < patternSegments.length; i++) {
+    const patternSegment = patternSegments[i];
+    const pathSegment = pathSegments[i];
+
+    if (patternSegment.startsWith(':')) {
+      params[patternSegment.slice(1)] = pathSegment;
+    } else if (patternSegment !== pathSegment) {
+      return null;
+    }
+  }
+  return params;
 }
 ```
 
-URLPattern is:
-- Built into Node.js (no dependencies)
-- Type-safe (TypeScript knows about groups)
-- Standard (works in browsers too)
-- Fast (C++ implementation)
+String patterns are:
+- Simple and readable
+- No external dependencies
+- Easy to understand and debug
+- Validated through Zod schemas
 
 ### Building Routes
 
@@ -303,16 +317,13 @@ URLPattern is:
 const routes = [
   {
     method: 'GET',
-    pattern: new URLPattern({ pathname: '/users/:userId' }),
-    handler: async (context, request, response, match) => {
-      const userId = match.pathname.groups.userId;
-      await getUserController(context, request, response, userId);
-    }
+    pattern: '/users/:userId',
+    controller: import('./controllers/users/[userId]/get')
   },
   {
     method: 'POST',
-    pattern: new URLPattern({ pathname: '/users' }),
-    handler: postUsersController
+    pattern: '/users',
+    controller: import('./controllers/users/post')
   }
 ];
 
@@ -320,10 +331,14 @@ const routes = [
 for (const route of routes) {
   if (route.method !== request.method) continue;
 
-  const match = route.pattern.exec(url);
-  if (!match) continue;
+  const matchedParams = matchRoute(pathname, route.pattern);
+  if (!matchedParams) continue;
 
-  await route.handler(context, request, response, match);
+  const controller = await route.controller;
+  const paramsSchema = controller.schema.shape?.params;
+  const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+
+  await controller.handler({ context, request, response, params });
   return;
 }
 ```

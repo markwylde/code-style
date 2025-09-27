@@ -291,9 +291,12 @@ Every server needs one:
 ```javascript
 routes.push({
   method: 'GET',
-  pattern: new URLPattern({ pathname: '/health' }),
-  schema: {},
-  handler: async ({ context, response }) => {
+  pattern: '/health',
+  controller: Promise.resolve({
+    schema: z.object({
+      params: z.object({})
+    }),
+    handler: async ({ context, response }) => {
     // Check critical dependencies
     const checks = {
       database: await checkDatabase(context),
@@ -310,10 +313,11 @@ routes.push({
       uptime: process.uptime(),
       memory: process.memoryUsage()
     }));
-  }
+    }
+  })
 });
 
-// Node's built-in URLPattern keeps exact-match endpoints like /health declarative
+// String patterns keep exact-match endpoints like /health declarative
 // while still aligning with the wider routing guidance for typed controllers.
 
 async function checkDatabase(context) {
