@@ -17,11 +17,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
-    "@types/react": "^19.1.13",
+    "@types/react": "^19.1.14",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.3",
     "typescript": "^5.9.2",
-    "vite": "^7.1.6"
+    "vite": "^7.1.7"
   },
   "dependencies": {
     "highlight.js": "^11.11.1",
