@@ -172,7 +172,9 @@ export async function getUsersController(context: Context, request: IncomingMess
   const sessionData = await requireSession(context, request, true);
   if (!sessionData.adminRole) throw new ForbiddenError("Admin access required");
 
-  const url = new URL(request.url || "", `http://${request.headers.host}`);
+  if (!request.url) throw new ValidationError("Missing request URL");
+  const baseUrl = context.config.publicBaseUrl;
+  const url = new URL(request.url, baseUrl);
   const { page, limit } = getPaginationFromUrl(url, 20, 100);
   const search = url.searchParams.get("search");
 
@@ -302,6 +304,8 @@ export type Config = {
   port: number;
   databaseUrl: string;
   jwtSecret: string;
+  publicBaseUrl: string;
+  maxBodyBytes: number;
 };
 
 export type ControllerSchema = {
@@ -314,6 +318,40 @@ export type ControllerSchema = {
 ### Ports And Bindings
 - Define ports per server in config (by name if multiple). Do not hard‑code numeric ports in code.
 - Keep bindings stable across restarts so clients and tests can rely on addresses.
+- Local dev defaults (if any) belong in `.env.example` or docs, not runtime fallbacks in production code.
+
+### No Runtime Defaults
+- Prefer explicit configuration over implicit behavior.
+- Do not use runtime fallback values for configuration (`||`, `??`, default params, or schema `.default(...)`) for app settings.
+- Missing configuration should fail fast during startup with a clear error.
+- This applies to security and non-security settings (ports, feature flags, titles, limits, etc).
+- Put sample values in `.env.example` and documentation, not in executable runtime defaults.
+- Database-level defaults for persisted columns are allowed when intentional (`defaultNow`, `defaultRandom`, etc); this rule is about runtime app configuration.
+
+Example:
+```env
+# .env.example
+SITE_TITLE="Example Site"
+```
+
+```typescript
+// Good
+const ConfigSchema = z.object({
+  siteTitle: z.string().min(1),
+});
+
+const config = ConfigSchema.parse({
+  siteTitle: process.env.SITE_TITLE,
+});
+
+// Bad
+const siteTitle = process.env.SITE_TITLE || "Example Site";
+```
+
+### Security Defaults
+- Never ship insecure fallback secrets (for example `JWT_SECRET='development-secret'` in runtime code).
+- Fail fast at startup when required secrets/config values are missing.
+- Treat `Host` as untrusted input; never use it for security decisions or canonical URL generation.
 
 ### errors.ts
 - Note: this is one of the very rare times a class is appropriate in a functional project.
@@ -471,8 +509,8 @@ export const UpdatePostSchema = z.object({
 });
 
 export const ListPostsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(10),
-  offset: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(100),
+  offset: z.coerce.number().int().min(0),
   published: z.coerce.boolean().optional(),
 });
 
@@ -636,7 +674,9 @@ export function createServer(context: Context) {
         return;
       }
 
-      const url = new URL(request.url, `http://${request.headers.host ?? 'localhost'}`);
+      // Do not trust Host header; use configured base URL for parsing only.
+      const baseUrl = context.config.publicBaseUrl;
+      const url = new URL(request.url, baseUrl);
       for (const route of routes) {
         if (request.method !== route.method) continue;
 
@@ -659,7 +699,7 @@ export function createServer(context: Context) {
 
         let body: unknown = undefined;
         if (bodySchema) {
-          const rawBody = await readBody(request);
+          const rawBody = await readBody(request, context.config.maxBodyBytes);
           body = bodySchema.parse(parseJsonSafely(rawBody));
         }
 
@@ -685,24 +725,94 @@ export function createServer(context: Context) {
 
 The new routing system uses dynamic imports for controllers and provides strongly typed handler functions. Each controller exports a `schema` object with `params` and `body` validation, and a `handler` function that receives validated data.
 
+Frameworkless routing is only justified if we can measure value. Track:
+- Cold start time and p95 request latency versus a framework baseline.
+- Bundle/runtime dependency count and security advisories.
+- Developer onboarding time for adding a new endpoint.
+- Defect rate in HTTP edge-cases (parsing, status codes, headers, timeouts).
+
 ### main.ts
 ```typescript
 import { createContext } from './createContext';
 import { createServer } from './createServer';
+import { once } from 'events';
+import { randomUUID } from 'crypto';
+import type { Server } from 'http';
+import { z } from 'zod/v4';
+
+const RuntimeConfigSchema = z.object({
+  PORT: z.coerce.number().int().min(0).max(65535),
+  DATABASE_URL: z.string().min(1),
+  JWT_SECRET: z.string().min(1),
+  PUBLIC_BASE_URL: z.string().url(),
+  MAX_BODY_BYTES: z.coerce.number().int().positive(),
+});
+
+function loadConfig() {
+  const env = RuntimeConfigSchema.parse(process.env);
+  return {
+    port: env.PORT,
+    databaseUrl: env.DATABASE_URL,
+    jwtSecret: env.JWT_SECRET,
+    publicBaseUrl: env.PUBLIC_BASE_URL,
+    maxBodyBytes: env.MAX_BODY_BYTES,
+  };
+}
+
+type ManagedServer = {
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+  restart: () => Promise<void>;
+};
+
+function createManagedServer(): ManagedServer {
+  let generation = randomUUID();
+  let context = createContext(loadConfig());
+  let server: Server = createServer(context);
+  const sockets = new Set<import('net').Socket>();
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+
+  async function start() {
+    server.listen(context.config.port);
+    await once(server, 'listening');
+  }
+
+  async function stop() {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    await context.destroy();
+  }
+
+  async function restart() {
+    await stop();
+    generation = randomUUID();
+    context = createContext({ ...context.config });
+    // Expose generation/liveness if background workers need to abort stale work.
+    (context as any).generation = generation;
+    server = createServer(context);
+    await start();
+  }
+
+  return { start, stop, restart };
+}
 
 async function main() {
-  const config = {
-    port: parseInt(process.env.PORT || '3000', 10),
-    databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
-    jwtSecret: process.env.JWT_SECRET || 'development-secret',
+  const managed = createManagedServer();
+  await managed.start();
+
+  const shutdown = async () => {
+    await managed.stop();
+    process.exit(0);
   };
 
-  const context = createContext(config);
-  const server = createServer(context);
-
-  server.listen(config.port, () => {
-    console.log(`Server listening on port ${config.port}`);
-  });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 main().catch(console.error);
@@ -1016,11 +1126,18 @@ type BodySchemaSpec = {
   };
 };
 
-export function readBody(request: IncomingMessage) {
+export function readBody(request: IncomingMessage, maxBytes: number) {
   return new Promise<string>((resolve, reject) => {
     let body = '';
+    let size = 0;
     request.setEncoding('utf8');
     request.on('data', (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size > maxBytes) {
+        request.destroy();
+        reject(new ValidationError(`Request body too large (max ${maxBytes} bytes)`));
+        return;
+      }
       body += chunk;
     });
     request.on('end', () => resolve(body));
@@ -1043,7 +1160,7 @@ export async function getBodyFromRequest<
     throw new ValidationError(`Unsupported content type. Expected ${schema.body.contentType}`);
   }
 
-  const rawBody = await readBody(request);
+  const rawBody = await readBody(request, 1_048_576);
   if (rawBody.length === 0) {
     throw new ValidationError('Request body is required');
   }
@@ -1217,8 +1334,12 @@ Before running tests, you need to set up a test database. This ensures tests run
 # Create test database
 createdb myapp_test
 
-# Set environment variable
+# Set required test environment variables
+export TEST_PORT="0"
 export TEST_DATABASE_URL="postgresql://localhost/myapp_test"
+export TEST_JWT_SECRET="test-secret"
+export TEST_PUBLIC_BASE_URL="http://localhost"
+export TEST_MAX_BODY_BYTES="1048576"
 
 # Run migrations on test database
 DATABASE_URL=$TEST_DATABASE_URL npm run db:migrate
@@ -1234,9 +1355,11 @@ import * as schema from '../../src/db/schema';
 
 export function createTestContext() {
   const config = {
-    port: 0,
-    databaseUrl: process.env.TEST_DATABASE_URL || 'postgresql://localhost/myapp_test',
-    jwtSecret: 'test-secret',
+    port: Number(process.env.TEST_PORT!),
+    databaseUrl: process.env.TEST_DATABASE_URL!,
+    jwtSecret: process.env.TEST_JWT_SECRET!,
+    publicBaseUrl: process.env.TEST_PUBLIC_BASE_URL!,
+    maxBodyBytes: Number(process.env.TEST_MAX_BODY_BYTES!),
   };
 
   return createContext(config);
@@ -1658,22 +1781,17 @@ describe('Email Service Integration', () => {
 
 **You probably don't need lodash.** Modern JavaScript has most of what you need built-in.
 
-### Avoid Vertical Dependency Stacks
+### Avoid Deep Coupling To A Single HTTP Stack
 
-Frameworks like Express create dependency chains that become maintenance nightmares:
+The risk is not "Express is bad"; the risk is deep coupling to framework-specific middleware and mutable request state.
 
 ```
-express → express-body-parser → express-passport → express-session → express-rate-limit
+app + framework-specific middleware + custom plugin assumptions + framework adapters
 ```
 
-When Express updates, every middleware might break. When `express-body-parser` updates, you're stuck coordinating versions across the entire stack.
+When you couple business logic to framework internals, upgrades become expensive regardless of framework.
 
-**Better approach:** Use focused, single-purpose libraries.
-
-Instead of:
-- `express-body-parser` → Use a standalone body parser like `@fastify/formbody`
-- `express-passport` → Use a dedicated auth library like `jose` for JWT
-- `express-session` → Use a session library that works with any framework
+**Better approach:** Keep routing/HTTP concerns at the edge, keep domain logic framework-agnostic, and use focused libraries (`jose`, `zod`, DB driver/ORM) behind explicit functions.
 
 ### Middleware is an Anti-Pattern
 
@@ -1707,7 +1825,7 @@ export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
   dbCredentials: {
-    url: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
+    url: process.env.DATABASE_URL!,
   },
 });
 ```
@@ -1721,7 +1839,7 @@ import * as schema from './schema';
 
 async function runMigrations() {
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://localhost/myapp',
+    connectionString: process.env.DATABASE_URL!,
   });
 
   const db = drizzle(pool, { schema });
@@ -1803,7 +1921,7 @@ DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
     "tsx": "^4.0.0",
     "drizzle-orm": "^0.29.0",
     "pg": "^8.11.0",
-    "zod": "^3.22.0"
+    "zod": "^4.0.0"
   }
 }
 ```
