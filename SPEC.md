@@ -193,15 +193,18 @@ Pattern:
 
 ```typescript
 // Controller (HTTP layer)
-export async function getUsersController(context: Context, request: IncomingMessage, response: ServerResponse) {
+export async function getUsersController(
+  context: Context,
+  request: IncomingMessage,
+  response: ServerResponse,
+  query: { page?: string; limit?: string; search?: string },
+) {
   const sessionData = await requireSession(context, request, true);
   if (!sessionData.adminRole) throw new ForbiddenError("Admin access required");
 
-  if (!request.url) throw new ValidationError("Missing request URL");
-  const baseUrl = context.config.publicBaseUrl;
-  const url = new URL(request.url, baseUrl);
-  const { page, limit } = getPaginationFromUrl(url, 20, 100);
-  const search = url.searchParams.get("search");
+  const page = query.page ? Number(query.page) : 1;
+  const limit = query.limit ? Number(query.limit) : 20;
+  const search = query.search;
 
   const result = await listUsers(context, { page, limit, search: search || undefined });
   sendJsonValidated(response, 200, result, UsersListResponseSchema);
@@ -741,7 +744,7 @@ export function createServer(context: Context) {
 }
 ```
 
-The new routing system uses dynamic imports for controllers and provides strongly typed handler functions. The router validates route params/query and passes `request` through; controllers parse and validate body content explicitly.
+The routing system uses dynamic imports for controllers, validates route params/query, and passes `request` through so controllers can parse and validate body content explicitly. In this style, handler payloads are runtime-validated at the router/controller boundary and can be narrowed further inside controllers as needed.
 
 Frameworkless routing is only justified if we can measure value. Track:
 - Cold start time and p95 request latency versus a framework baseline.

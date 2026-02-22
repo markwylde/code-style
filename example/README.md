@@ -1,6 +1,6 @@
 # Todo API Example
 
-A working Node.js todo API that follows the code-style spec:
+A working Node.js todo API that follows the code-style spec principles in a minimal single-package example:
 
 - Context pattern with explicit dependencies
 - Thin controllers + model-only data logic
@@ -10,6 +10,8 @@ A working Node.js todo API that follows the code-style spec:
 - Health/readiness endpoint (`GET /health`)
 - OpenAPI document endpoint (`GET /openapi.json`)
 - Integration tests using the same server factory as production
+
+This example is intentionally smaller than the full monorepo structure shown in the main spec. It demonstrates the API architecture and lifecycle patterns without adding workspace/package boilerplate.
 
 ## Quick start
 

@@ -195,10 +195,10 @@ export async function handler({ context, params, response }: Handler<typeof sche
 
 ## Dynamic Imports for Controllers
 
-Routes use dynamic imports to load controllers on-demand. Each controller exports a `schema` for validation and a `handler` function.
+Routes use dynamic imports for controller modules. In this project shape, route entries store `import(...)` promises up front and the router awaits the matched route's module. Each controller exports a `schema` for validation and a `handler` function.
 
 ```typescript
-// createServer.ts
+// routes.ts
 const routes: Route[] = [
   {
     method: "GET",
@@ -218,7 +218,7 @@ const routes: Route[] = [
 ];
 ```
 
-Controllers are loaded dynamically when routes are matched. Each controller exports a typed handler function that receives validated parameters and context.
+Controllers are dynamically imported modules referenced by the route table, and the matched route's controller is awaited before execution. Handlers intentionally receive runtime-validated `params`/`query` values and can parse them to stricter local types when needed.
 
 ## Testing Routes End-to-End
 
@@ -243,7 +243,7 @@ it("GET /users/:id returns user", async () => {
 1. Create the controller file in the correct folder structure (e.g., `controllers/users/[userId]/get.ts`).
 2. Export a `schema` object with Zod validation for `params` and optionally `query`.
 3. Export a `handler` function that receives validated data.
-4. Add the route to the routes array in `createServer.ts` with a `URLPattern`.
+4. Add the route to the routes array in `routes.ts` with a `URLPattern`.
 5. Add end-to-end tests that hit the route via HTTP.
 
 Following this checklist keeps routing predictable, controllers thin, and models isolated, exactly what the spec demands.

@@ -6,6 +6,8 @@ A modern web application for presenting and sharing code style guidelines and be
 
 This project provides an interactive documentation site that presents the NodeJS Code Guide specification - a comprehensive guide for building functional, minimal dependency Node.js projects using the context pattern. The guide emphasizes dependency injection without frameworks, making testing easy and keeping the codebase simple.
 
+The `example/` folder is an intentionally minimal single-package API implementation of the same principles, while `SPEC.md` shows the fuller monorepo target shape.
+
 ## Features
 
 - **Interactive Documentation**: Browse through chapters covering different aspects of Node.js development
