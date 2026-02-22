@@ -129,29 +129,35 @@ import { createServer } from 'http';
 const routes = [
   {
     method: 'GET',
-    pattern: '/users/:id',
+    pattern: new URLPattern({ pathname: '/users/:id' }),
     controller: import('./controllers/users/[userId]/get')
   }
 ];
 
 createServer(async (request, response) => {
-  const { pathname } = parse(request.url || '', true);
+  if (!request.url) {
+    response.statusCode = 400;
+    response.end('Invalid request URL');
+    return;
+  }
+  const baseUrl = process.env.PUBLIC_BASE_URL!;
+  const { pathname } = new URL(request.url, baseUrl);
 
   for (const route of routes) {
     if (request.method !== route.method) continue;
 
-    const matchedParams = matchRoute(pathname, route.pattern);
-    if (!matchedParams) continue;
+    const match = route.pattern.exec({ pathname });
+    if (!match) continue;
 
     const controller = await route.controller;
-    const params = controller.schema.shape?.params?.parse(matchedParams) || {};
+    const params = controller.schema.shape?.params?.parse(match.pathname.groups ?? {}) || {};
 
     return controller.handler({ request, response, params });
   }
 
   response.statusCode = 404;
   response.end('Not found');
-}).listen(3000);
+}).listen(Number(process.env.PORT!));
 ```
 
 ## The Middleware Trap

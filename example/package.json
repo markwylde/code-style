@@ -1,17 +1,21 @@
 {
-  "name": "notes-example",
+  "name": "@code-style/example",
   "private": true,
-  "version": "0.0.0",
-  "packageManager": "npm@11.6.1",
-  "workspaces": [
-    "packages/*"
-  ],
+  "type": "module",
   "scripts": {
-    "build": "npm run build --workspace=@notes/api",
-    "start": "npm run start --workspace=@notes/api",
-    "dev": "npm run dev --workspace=@notes/api",
-    "lint": "npm run lint --workspace=@notes/api",
-    "test": "npm run test --workspace=@notes/api",
-    "tidy": "npm run tidy --workspace=@notes/api"
+    "dev": "node --env-file=.env.example --env-file-if-exists=.env --watch src/main.ts",
+    "start": "node --env-file=.env.example --env-file-if-exists=.env src/main.ts",
+    "lint": "npm run lint:biome && npm run lint:types",
+    "lint:biome": "biome check .",
+    "lint:types": "tsc -p tsconfig.lint.json --noEmit",
+    "test": "node --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.4",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
   }
 }

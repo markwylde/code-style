@@ -12,11 +12,13 @@ order: 5
 **Routing Principle**
 
 Declare every route explicitly. Pair it with a controller file that performs only HTTP concerns. Let models and services own the rest.
+This includes infrastructure endpoints like `/health`, `/ready`, and `/openapi`; they are not special-cased in `createServer`.
 :::
 
 ## Why URLPattern
 
 `URLPattern` is built into modern Node.js releases and the browser runtime. Using it keeps routing declarative without rolling our own matchers.
+When loading TypeScript controllers directly with Node, include the full `.ts` filename in local imports and dynamic imports.
 
 - **Explicit**: Every route pairs an HTTP method with a `URLPattern` object.
 - **Typed parameters**: Captured groups surface as strongly typed properties in TypeScript.
@@ -28,17 +30,17 @@ const routes: Route[] = [
   {
     method: "GET",
     pattern: new URLPattern({ pathname: "/users" }),
-    controller: import("./controllers/users/get")
+    controller: import("./controllers/users/get.ts")
   },
   {
     method: "POST",
     pattern: new URLPattern({ pathname: "/users" }),
-    controller: import("./controllers/users/post")
+    controller: import("./controllers/users/post.ts")
   },
   {
     method: "GET",
     pattern: new URLPattern({ pathname: "/users/:userId" }),
-    controller: import("./controllers/users/[userId]/get")
+    controller: import("./controllers/users/[userId]/get.ts")
   }
 ];
 ```
@@ -91,7 +93,8 @@ export function createServer(context: Context) {
         return;
       }
 
-      const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+      const baseUrl = context.config.publicBaseUrl;
+      const url = new URL(request.url, baseUrl);
       const pathname = url.pathname;
 
       for (const route of routes) {
@@ -104,7 +107,6 @@ export function createServer(context: Context) {
         const schema = controller.schema as z.ZodObject<any> | undefined;
         const paramsSchema = schema?.shape?.params as z.ZodTypeAny | undefined;
         const querySchema = schema?.shape?.query as z.ZodTypeAny | undefined;
-        const bodySchema = schema?.shape?.body as z.ZodTypeAny | undefined;
 
         const params = paramsSchema
           ? paramsSchema.parse(match.pathname.groups ?? {})
@@ -114,19 +116,12 @@ export function createServer(context: Context) {
           ? querySchema.parse(Object.fromEntries(url.searchParams.entries()))
           : {};
 
-        let body: unknown = undefined;
-        if (bodySchema) {
-          const rawBody = await readBody(request);
-          body = bodySchema.parse(parseJsonSafely(rawBody));
-        }
-
         await controller.handler({
           context,
           request,
           response,
           params,
           query,
-          body,
         });
         return;
       }
@@ -153,7 +148,7 @@ controllers/
 │   ├── post.ts         → POST /users
 │   └── [userId]/
 │       ├── get.ts      → GET /users/:id
-│       └── post.ts     → POST /users/:id
+│       └── put.ts      → PUT /users/:id
 └── posts/
     └── get.ts          → GET /posts
 ```
@@ -195,7 +190,8 @@ export async function handler({ context, params, response }: Handler<typeof sche
 
 - Convert path parameters to domain types inside controllers (numbers, UUID validation, etc.).
 - The router parses query parameters via `schema.query` and passes them to controllers; controllers never touch `request.url` directly.
-- Controllers may throw domain errors; top-level error middleware handles translation into HTTP responses.
+- Controllers parse request bodies explicitly (for example `getBodyFromRequest(context, request, "json", options?)`) and validate with their body schema.
+- Controllers may throw domain errors; the top-level HTTP error handler translates them into HTTP responses.
 
 ## Dynamic Imports for Controllers
 
@@ -245,7 +241,7 @@ it("GET /users/:id returns user", async () => {
 ## Adding a New Route
 
 1. Create the controller file in the correct folder structure (e.g., `controllers/users/[userId]/get.ts`).
-2. Export a `schema` object with Zod validation for `params` and `body`.
+2. Export a `schema` object with Zod validation for `params` and optionally `query`.
 3. Export a `handler` function that receives validated data.
 4. Add the route to the routes array in `createServer.ts` with a `URLPattern`.
 5. Add end-to-end tests that hit the route via HTTP.

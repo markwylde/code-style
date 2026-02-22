@@ -48,9 +48,11 @@ project/
 - Explicit over implicit: no hidden middleware or globals
 - Functions over classes: single‑purpose exports, first arg is `context`
 - Minimal dependencies: prefer Node built‑ins; adopt libraries intentionally
+- Runtime-first TypeScript: run APIs directly with `node src/main.ts` (no TS->JS bundling step)
 - Strong boundaries: controllers ≠ models; services handle external effects
 - Lifecycle guarantees: start only when ready; stop releases all resources
 - Type‑safe I/O: zod for external shapes; clean TS types for internals
+- ESM caveat: local imports use full `.ts` filenames (for example `import { x } from "./x.ts"`)
 - Test the real system: use a real DB; only mock true third‑party services
 
 ## How It Fits Together
@@ -58,7 +60,7 @@ project/
 ```ts
 // Controller (HTTP layer)
 export async function postUsersController(context, request, response) {
-  const body = await readBody(request);
+  const body = await readBody(request, context.config.maxBodyBytes);
   const data = CreateUserSchema.parse(JSON.parse(body));
   const user = await createUser(context, data); // model
   response.statusCode = 201;

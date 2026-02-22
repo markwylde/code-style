@@ -249,9 +249,11 @@ When you test with real dependencies, you can refactor implementation details wi
 ```javascript
 export function createTestContext(overrides = {}) {
   const config = {
-    databaseUrl: process.env.TEST_DATABASE_URL ||
-                 'postgresql://localhost/test',
-    port: 0,  // Random port for tests
+    databaseUrl: process.env.TEST_DATABASE_URL!,
+    port: Number(process.env.TEST_PORT!),
+    jwtSecret: process.env.TEST_JWT_SECRET!,
+    publicBaseUrl: process.env.TEST_PUBLIC_BASE_URL!,
+    maxBodyBytes: Number(process.env.TEST_MAX_BODY_BYTES!),
     ...overrides
   };
 

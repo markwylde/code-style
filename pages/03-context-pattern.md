@@ -150,14 +150,24 @@ export function createContext(config) {
     db,
     config,
     services,
-    cleanupFunctions,
     async destroy() {
-      for (const cleanup of this.cleanupFunctions) {
+      for (const cleanup of cleanupFunctions) {
         await cleanup();
       }
     }
   };
 }
+```
+
+Type style rule: prefer `type` aliases over `interface` for project types.
+
+```typescript
+export type Context = {
+  db: Database;
+  config: Config;
+  services: Services;
+  destroy: () => Promise<void>;
+};
 ```
 
 ### Why Cleanup Matters
