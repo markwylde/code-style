@@ -253,7 +253,7 @@ Only catch errors when you can meaningfully handle them or add context. If you'r
 
 ```javascript
 export async function parseJsonBody(request) {
-  const body = await readBody(request);
+  const body = await readBody(request, 1_048_576);
 
   try {
     return JSON.parse(body);

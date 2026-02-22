@@ -332,75 +332,40 @@ export async function createUser(context, userData) {
 
 ## The Router Layer
 
-### Why String Patterns?
-
-```javascript
-// Traditional string matching
-if (request.url === '/users') { /* ... */ }
-if (request.url.startsWith('/users/')) { /* ... */ }
-if (request.url.match(/^\/users\/(\d+)$/)) { /* ... */ }
-
-// String patterns with custom matching
-function matchRoute(pathname, routePattern) {
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const patternSegments = routePattern.split('/').filter(Boolean);
-
-  if (pathSegments.length !== patternSegments.length) return null;
-
-  const params = {};
-  for (let i = 0; i < patternSegments.length; i++) {
-    const patternSegment = patternSegments[i];
-    const pathSegment = pathSegments[i];
-
-    if (patternSegment.startsWith(':')) {
-      params[patternSegment.slice(1)] = pathSegment;
-    } else if (patternSegment !== pathSegment) {
-      return null;
-    }
-  }
-  return params;
-}
-```
-
-String patterns are:
-- Simple and readable
-- No external dependencies
-- Easy to understand and debug
-- Validated through Zod schemas
-
-### Building Routes
+Use `URLPattern` for route matching. This keeps routing declarative and aligned with the spec.
 
 ```javascript
 const routes = [
   {
     method: 'GET',
-    pattern: '/users/:userId',
+    pattern: new URLPattern({ pathname: '/users/:userId' }),
     controller: import('./controllers/users/[userId]/get')
   },
   {
     method: 'POST',
-    pattern: '/users',
+    pattern: new URLPattern({ pathname: '/users' }),
     controller: import('./controllers/users/post')
   }
 ];
 
-// Simple router
 for (const route of routes) {
   if (route.method !== request.method) continue;
 
-  const matchedParams = matchRoute(pathname, route.pattern);
-  if (!matchedParams) continue;
+  const match = route.pattern.exec({ pathname });
+  if (!match) continue;
 
   const controller = await route.controller;
   const paramsSchema = controller.schema.shape?.params;
-  const params = paramsSchema ? paramsSchema.parse(matchedParams) : {};
+  const params = paramsSchema
+    ? paramsSchema.parse(match.pathname.groups ?? {})
+    : {};
 
   await controller.handler({ context, request, response, params });
   return;
 }
 ```
 
-No framework. No magic. Just a loop.
+No framework. No hidden middleware. Just explicit routing and typed validation.
 
 ## Complex Operations
 

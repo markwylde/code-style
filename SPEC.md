@@ -79,6 +79,7 @@ project/
 ## Core Concepts
 
 - Use the context pattern instead of complex dependency injection frameworks.
+- Prefer local, explicit code first. Introduce abstractions only when repetition or mixed concerns clearly justify them.
 - Comments should be rarely be needed as code should be written to be self-documenting.
 - Comments should be used to explain why a unintuitive code block or hack is needed, not what it does.
 - Avoid unclear abbreviations. Standard technical abbreviations (`db`, `url`, `id`, `api`) are acceptable.
@@ -87,6 +88,26 @@ project/
 - Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
  - UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
 - Use npm workspaces to manage the monorepo structure with separate packages for api, ui, and admin-ui.
+
+### Abstraction Discipline
+
+- Do not abstract on first implementation. Write the straightforward version first.
+- Usually do not abstract on second implementation either. Confirm the pattern is stable.
+- Abstract on repeated, stable patterns (typically the third time) or when an extraction clearly reduces cognitive load in a hot file.
+- Every abstraction must reduce complexity at call sites; if it only moves complexity, remove it.
+- Avoid speculative helper layers and pass-through wrappers.
+
+Good abstractions in this code style:
+- `utils/createRouter.ts` to keep request routing/validation/error translation out of `createServer.ts`.
+- `utils/waitForHealth.ts` to keep readiness polling out of server lifecycle orchestration.
+
+When to keep code inline:
+- One-off logic with a single call site.
+- Logic that is clearer where it is used than behind a generic helper.
+
+Server factory rule:
+- If you run a single HTTP server, keep a single `createServer(...)` factory.
+- Do not add nested server factories like `createApiServer(...)` unless you actually run multiple distinct servers with distinct responsibilities.
 
 ### Server Lifecycle And Portability
 
@@ -98,11 +119,13 @@ Lifecycle API (conceptual):
 - createServer(context) returns an object exposing: start(), stop(), restart(), context, and references to all running HTTP servers.
 - start() resolves only when all HTTP servers are bound on their configured ports and report healthy via a readiness endpoint.
 - stop() resolves only when all HTTP servers are closed, open sockets destroyed, timers cleared, and resources released. No leaks.
-- restart() = stop old servers and context, build a brand‑new context, build brand‑new servers on the same ports, then start and wait for readiness. Never reuse the old context.
+- restart() = stop and then start the same managed server instance on the same ports, then wait for readiness.
+- If you need a brand‑new context/server graph, call stop(), construct a new server via createServer(...), then start() it.
 - Ports per server are defined in config and must remain stable across restarts. Avoid hard‑coded port numbers.
 
 Readiness and health:
 - Every HTTP server exposes a lightweight health endpoint for readiness checks used by start/restart and tests.
+- Health/readiness endpoints are normal routed endpoints implemented through the same `routes` table and controller file conventions.
 - Callers should not insert arbitrary sleeps; lifecycle methods guarantee readiness before resolving.
 
 ### Controllers And Models
@@ -110,6 +133,8 @@ Readiness and health:
 - Controllers live in files following `controllers/{entity}/{optionalSegment}/{method}.ts`, for example `controllers/users/[userId]/get.ts`.
 - Controllers are thin HTTP adapters. They parse input, enforce authentication and authorization, call models and services, and shape HTTP responses. They contain no database logic.
 - HTTP routing uses `URLPattern` objects for declarative matching. Each route declares a method and `URLPattern`, and handlers receive parsed parameters from the pattern match.
+- Routers should parse and validate route params/query only. Controllers own request-body parsing (for example via `getBodyFromRequest(context, request, mode, options?)`).
+- Do not special-case endpoints in `createServer` (including `/health`, `/ready`, `/openapi`). If an endpoint exists, it must be declared in the route table and handled by a controller.
 - Models encapsulate domain and data logic. They validate inputs relevant to the domain, perform all database access, apply invariants, and return plain data objects. They contain no HTTP concerns.
 - Controllers register OpenAPI via zod schemas and map domain data from models to the response. OpenAPI types describe the external shape; model types describe the internal domain.
 - Types used by models are defined with zod and inferred types near the model functions, or shared in `schemas/` when reused by multiple callers. Controllers import those types to validate I/O, but do not redefine domain types.
@@ -264,19 +289,20 @@ Use AppError for application-specific errors that bubble up to the HTTP layer fo
 - All background timers, intervals, DB pools, and service instances are owned by context and registered for cleanup.
 
 Background work safety:
-- When a server is stopping or restarting, nothing spawned from that server may continue using the old context. This includes background jobs, queues, schedulers, and loggers.
-- Provide a liveness token or generation number on context. Background tasks must check it and abort if the context is closed or generation has changed.
-- If work must survive restart, flush it before stop or persist it to a durable queue and resume with the new context after restart.
+- When a server is stopping or restarting, nothing spawned from that server may continue once context is stopping/closed. This includes background jobs, queues, schedulers, and loggers.
+- Provide a liveness/closed signal on context. Background tasks must check it and abort when context is stopping or closed.
+- If your application performs a full context rebuild (stop + new createServer), use an instance/version token to detect stale work from older instances.
+- If work must survive restart, flush it before stop or persist it to a durable queue and resume after start.
 - Never write to databases, queues, or files using a closed or stale context.
 
-Fresh context on restart:
-- Always rebuild context from the source of truth (env, config files, database) rather than reusing mutated in‑memory state.
-- Recreate connection pools and service instances; do not carry handles across restarts.
+Fresh context policy:
+- Rebuilding a fresh context is an explicit operation by creating a new server instance after stop(), not an implicit requirement of restart().
+- When rebuilding, source config from env/config files and recreate pools/services from scratch.
 
 Readiness workflow:
 - start() resolves only when all servers report healthy.
 - stop() resolves only when all servers are closed and resources are cleaned.
-- restart() resolves only when new servers are healthy on the same ports.
+- restart() resolves only when the restarted server is healthy on the same ports.
 
 
 ### types.ts
@@ -430,7 +456,7 @@ export const postsRelations = relations(posts, ({ one }) => ({
 
 ### schemas/users.ts
 ```typescript
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 import { users } from '../db/schema';
 
@@ -687,7 +713,6 @@ export function createServer(context: Context) {
         const schema = controller.schema as z.ZodObject<any> | undefined;
         const paramsSchema = schema?.shape?.params as z.ZodTypeAny | undefined;
         const querySchema = schema?.shape?.query as z.ZodTypeAny | undefined;
-        const bodySchema = schema?.shape?.body as z.ZodTypeAny | undefined;
 
         const params = paramsSchema
           ? paramsSchema.parse(match.pathname.groups ?? {})
@@ -697,19 +722,12 @@ export function createServer(context: Context) {
           ? querySchema.parse(Object.fromEntries(url.searchParams.entries()))
           : {};
 
-        let body: unknown = undefined;
-        if (bodySchema) {
-          const rawBody = await readBody(request, context.config.maxBodyBytes);
-          body = bodySchema.parse(parseJsonSafely(rawBody));
-        }
-
         await controller.handler({
           context,
           request,
           response,
           params,
           query,
-          body,
         } as Handler<typeof controller.schema>);
         return;
       }
@@ -723,7 +741,7 @@ export function createServer(context: Context) {
 }
 ```
 
-The new routing system uses dynamic imports for controllers and provides strongly typed handler functions. Each controller exports a `schema` object with `params` and `body` validation, and a `handler` function that receives validated data.
+The new routing system uses dynamic imports for controllers and provides strongly typed handler functions. The router validates route params/query and passes `request` through; controllers parse and validate body content explicitly.
 
 Frameworkless routing is only justified if we can measure value. Track:
 - Cold start time and p95 request latency versus a framework baseline.
@@ -736,9 +754,8 @@ Frameworkless routing is only justified if we can measure value. Track:
 import { createContext } from './createContext';
 import { createServer } from './createServer';
 import { once } from 'events';
-import { randomUUID } from 'crypto';
 import type { Server } from 'http';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 const RuntimeConfigSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535),
@@ -766,7 +783,6 @@ type ManagedServer = {
 };
 
 function createManagedServer(): ManagedServer {
-  let generation = randomUUID();
   let context = createContext(loadConfig());
   let server: Server = createServer(context);
   const sockets = new Set<import('net').Socket>();
@@ -791,10 +807,7 @@ function createManagedServer(): ManagedServer {
 
   async function restart() {
     await stop();
-    generation = randomUUID();
     context = createContext({ ...context.config });
-    // Expose generation/liveness if background workers need to abort stale work.
-    (context as any).generation = generation;
     server = createServer(context);
     await start();
   }
@@ -808,7 +821,6 @@ async function main() {
 
   const shutdown = async () => {
     await managed.stop();
-    process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
@@ -1116,7 +1128,7 @@ export async function handler({ context, body, response }: Handler<typeof schema
 ### utils/http.ts
 ```typescript
 import { IncomingMessage } from 'http';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import { ValidationError } from '../errors';
 
 type BodySchemaSpec = {
@@ -1860,9 +1872,11 @@ runMigrations().catch(console.error);
 
 **For Node.js Applications:**
 - Don't compile TypeScript to JavaScript
-- Use `tsx` to run TypeScript files directly: `tsx src/main.ts`
+- Use Node's built-in type stripping to run TypeScript files directly: `node src/main.ts`
 - Faster development cycle, no build step needed
 - Simpler deployment (just copy source files)
+- Caveat: all local ESM imports must include the full `.ts` filename (including dynamic imports)
+- DO NOT import with `.js` extension UNLESS the actual source file is `.js` and not `.ts`.
 
 **For Libraries:**
 - Always compile to JavaScript before publishing
@@ -1874,13 +1888,20 @@ runMigrations().catch(console.error);
 
 ```bash
 # Development
-tsx --watch src/main.ts
+node --watch src/main.ts
 
 # Production (still no compilation needed)
-tsx src/main.ts
+node src/main.ts
 
 # With environment variables
-DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
+DATABASE_URL=postgresql://localhost/myapp node src/main.ts
+```
+
+```typescript
+import { findTodoById } from "../../../models/todos.ts";
+import { TodoIdParamSchema, TodoSchema } from "../../../schemas/todos.ts";
+import type { Controller } from "../../../types.ts";
+import { sendJsonValidated } from "../../../utils/http.ts";
 ```
 
 ### Root package.json (Workspace Configuration)
@@ -1911,14 +1932,13 @@ DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "tsx src/main.ts",
-    "start": "tsx src/main.ts",
-    "test": "tsx --test tests/**/*.test.ts",
-    "db:migrate": "tsx src/db/migrate.ts",
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "test": "node --test tests",
+    "db:migrate": "node src/db/migrate.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "tsx": "^4.0.0",
     "drizzle-orm": "^0.29.0",
     "pg": "^8.11.0",
     "zod": "^4.0.0"
@@ -1982,14 +2002,13 @@ DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "node --test src",
     "prepublishOnly": "npm run build"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
   "devDependencies": {
-    "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   }
 }
@@ -2002,7 +2021,7 @@ DATABASE_URL=postgresql://localhost/myapp tsx src/main.ts
 Each controller should export a `schema` object that mirrors the OpenAPI path definition while reusing the same Zod validators used for runtime validation:
 
 ```typescript
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import { ControllerDefinition, ControllerSchema, Handler } from '../../types';
 import { UserSchema } from '../../schemas/users';
 
@@ -2055,7 +2074,7 @@ Create an `/openapi` endpoint that collects all controller schemas:
 
 ```typescript
 // In createServer.ts
-import { z, toJSONSchema } from 'zod/v4';
+import { z, toJSONSchema } from 'zod';
 import { controller as listUsersController } from './controllers/users/get';
 import { controller as createUserController } from './controllers/users/post';
 import { controller as getUserController } from './controllers/users/[userId]/get';

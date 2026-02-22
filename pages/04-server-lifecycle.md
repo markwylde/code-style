@@ -230,17 +230,16 @@ await server.restart();  // Still using old context!
 export function createContext(config) {
   return {
     config: {
-      port: config.port || (
-        process.env.NODE_ENV === 'test' ? 0 :  // Random port for tests
-        process.env.PORT || 3000                // Fixed port otherwise
-      ),
+      port: config.port,
       // ...
     }
   };
 }
 ```
 
-Tests get random ports (port 0), preventing conflicts. Production gets stable ports.
+Tests can still use random ports by explicitly setting `config.port = 0`. Production keeps stable ports via explicit configuration.
+
+Spec rule reminder: avoid runtime defaults for configuration. Do not use `||`, `??`, default parameters, or schema `.default(...)` for app settings like ports, limits, and secrets. Validate required config at startup and fail fast if anything is missing.
 
 ### Multiple Servers
 

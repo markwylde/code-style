@@ -169,16 +169,21 @@ export function getAge(birthDate) {
 
 ```javascript
 // utils/http.ts
-export async function readBody(request) {
+export async function readBody(request, maxBytes) {
   const chunks = [];
+  let size = 0;
   for await (const chunk of request) {
+    size += Buffer.byteLength(chunk);
+    if (size > maxBytes) {
+      throw new ValidationError(`Request body too large (max ${maxBytes} bytes)`);
+    }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString();
 }
 
 export async function parseJsonBody(request) {
-  const body = await readBody(request);
+  const body = await readBody(request, 1_048_576);
   try {
     return JSON.parse(body);
   } catch {
