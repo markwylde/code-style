@@ -1,36 +1,39 @@
-# Notes Example
+# Todo API Example
 
-A minimal implementation of the NodeJS Code Guide specification for a simple notes service. This project demonstrates the context pattern, portable HTTP server lifecycle, and OpenAPI documentation generation using Zod schemas.
+A working Node.js todo API that follows the code-style spec:
 
-## Packages
+- Context pattern with explicit dependencies
+- Thin controllers + model-only data logic
+- URLPattern routing
+- Centralized error handling
+- Server lifecycle with `start`, `stop`, and `restart`
+- Health/readiness endpoint (`GET /health`)
+- OpenAPI document endpoint (`GET /openapi.json`)
+- Integration tests using the same server factory as production
 
-- `@notes/api` – Node HTTP server that exposes a JSON API for creating and listing notes.
-
-## Getting Started
+## Quick start
 
 ```bash
+cd example
 npm install
-npm run dev
+npm run start
 ```
 
-The API will be reachable at `http://localhost:4000` with an interactive health endpoint at `/health` and OpenAPI document at `/openapi`.
+This example auto-loads `.env.example` by default, and `.env` if present (for local overrides). It runs directly with Node type stripping (`node src/main.ts`), no build step.
 
-## Available Scripts
+## Endpoints
 
-- `npm run dev` – Start the API in watch mode.
-- `npm run start` – Start the API once.
-- `npm run build` – Type-check the project.
-- `npm run lint` – Run Biome for static analysis.
-- `npm run test` – Compile and execute the Node.js built-in test runner.
+- `GET /health`
+- `GET /openapi.json`
+- `GET /todos`
+- `POST /todos`
+- `GET /todos/:todoId`
+- `PUT /todos/:todoId`
+- `DELETE /todos/:todoId`
 
-## Example Requests
+## Test
 
 ```bash
-curl -X POST http://localhost:4000/notes \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Daily Journal","content":"Write more code."}'
-
-curl http://localhost:4000/notes
+cd example
+npm test
 ```
-
-This example uses an in-memory data store for clarity. Real projects can replace the repository implementation inside the context without changing controllers or server lifecycle code.
