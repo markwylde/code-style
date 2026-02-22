@@ -36,13 +36,13 @@ project/
 │   │   │       │   ├── post.ts
 │   │   │       │   └── [userId]/
 │   │   │       │       ├── get.ts
-│   │   │       │       └── post.ts
+│   │   │       │       └── put.ts
 │   │   │       └── posts/
 │   │   │           ├── get.ts
 │   │   │           ├── post.ts
 │   │   │           └── [postId]/
 │   │   │               ├── get.ts
-│   │   │               └── post.ts
+│   │   │               └── put.ts
 │   │   ├── tests/
 │   │   │   ├── helpers/
 │   │   │   │   └── createTestServer.ts
@@ -52,9 +52,9 @@ project/
 │   │   │       └── users/
 │   │   │           ├── get.test.ts
 │   │   │           ├── post.test.ts
-│   │   │           └── [postId]/
+│   │   │           └── [userId]/
 │   │   │               ├── get.test.ts
-│   │   │               └── post.test.ts
+│   │   │               └── put.test.ts
 │   │   ├── drizzle/
 │   │   │   └── migrations/
 │   │   ├── drizzle.config.ts
@@ -81,7 +81,8 @@ project/
 - Use the context pattern instead of complex dependency injection frameworks.
 - Comments should be rarely be needed as code should be written to be self-documenting.
 - Comments should be used to explain why a unintuitive code block or hack is needed, not what it does.
-- Never abbreviate anything, variables, functions, etc.
+- Avoid unclear abbreviations. Standard technical abbreviations (`db`, `url`, `id`, `api`) are acceptable.
+- Use `type` aliases instead of `interface`. `interface` declaration merging is implicit/global magic and is not allowed.
 - Prefer built in Node functionality over third party libraries.
 - Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
  - UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
@@ -94,7 +95,7 @@ project/
 - Do not rely on globals for server state. All resources live in context and are created/destroyed via explicit lifecycle calls.
 
 Lifecycle API (conceptual):
-- createServer(context) returns an object exposing: start(), stop(), restart(), getContext(), and references to all running HTTP servers.
+- createServer(context) returns an object exposing: start(), stop(), restart(), context, and references to all running HTTP servers.
 - start() resolves only when all HTTP servers are bound on their configured ports and report healthy via a readiness endpoint.
 - stop() resolves only when all HTTP servers are closed, open sockets destroyed, timers cleared, and resources released. No leaks.
 - restart() = stop old servers and context, build a brand‑new context, build brand‑new servers on the same ports, then start and wait for readiness. Never reuse the old context.
@@ -112,7 +113,7 @@ Readiness and health:
 - Models encapsulate domain and data logic. They validate inputs relevant to the domain, perform all database access, apply invariants, and return plain data objects. They contain no HTTP concerns.
 - Controllers register OpenAPI via zod schemas and map domain data from models to the response. OpenAPI types describe the external shape; model types describe the internal domain.
 - Types used by models are defined with zod and inferred types near the model functions, or shared in `schemas/` when reused by multiple callers. Controllers import those types to validate I/O, but do not redefine domain types.
-- Permissions and cohort checks exist only in controllers (or dedicated auth middleware). Models should assume the caller is authorized.
+- Permissions and cohort checks exist only in controllers (or explicit auth helper functions called by controllers). Models should assume the caller is authorized.
 - Services handle external protocols or multi-step processes (e.g. email or payments). Prefer orchestrating services from controllers (or dedicated service/orchestrator functions). Models should not trigger cross-boundary side effects (email, queues, third-party APIs). If a workflow requires side effects alongside data changes, expose a service like `registerUser` that composes model calls and invokes side effects explicitly.
 
 Rules:
@@ -133,7 +134,7 @@ Models should:
 - Provide clean, typed interfaces for data access
 - Handle pagination, filtering, and search logic
 - Throw appropriate errors (`NotFoundError`, `ConflictError`, `ValidationError`, etc.)
-- Be pure functions that take `Context` as the first parameter
+- Be deterministic functions with explicit dependencies that take `Context` as the first parameter
 
 Models should NOT:
 - Handle HTTP requests/responses
@@ -149,11 +150,11 @@ Controllers are thin HTTP layers that coordinate between the transport (HTTP), a
 Controllers should:
 - Handle HTTP request/response lifecycle
 - Parse and validate query parameters and request bodies
-- Manage authentication and authorization (via session middleware)
+- Manage authentication and authorization (via explicit session/auth helpers)
 - Call appropriate model functions with validated data
 - Handle OpenAPI specification registration
 - Transform model responses for HTTP responses
-- Let error handling bubble to the top-level middleware
+- Let error handling bubble to the top-level HTTP error handler
 
 Controllers should NOT:
 - Contain database queries or business logic
@@ -222,7 +223,7 @@ export async function getUsersController(context: Context, request: IncomingMess
 #### Error Handling
 
 - Models: throw business logic errors (`NotFoundError`, `ConflictError`, `ValidationError`).
-- Controllers: validate inputs and allow errors to bubble to the HTTP error middleware.
+- Controllers: validate inputs and allow errors to bubble to the HTTP error handler.
 
 #### Testing Strategy
 
@@ -281,32 +282,38 @@ Readiness workflow:
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from './db/schema';
 
-export interface Context {
+export type Context = {
   db: NodePgDatabase<typeof schema>;
   config: Config;
   services: Services;
   destroy: () => Promise<void>;
-}
+};
 
-export interface Services {
+export type Services = {
   emailProvider?: {
     send: (options: { to: string; subject: string; html: string }) => Promise<{ messageId: string }>;
   };
   paymentProvider?: {
     createCharge: (amount: number, token: string) => Promise<{ id: string; status: string }>;
   };
-}
+};
 
-export interface Config {
+export type Config = {
   port: number;
   databaseUrl: string;
   jwtSecret: string;
-}
+};
+
+export type ControllerSchema = {
+  params?: unknown;
+  query?: unknown;
+  body?: unknown;
+};
+```
 
 ### Ports And Bindings
 - Define ports per server in config (by name if multiple). Do not hard‑code numeric ports in code.
 - Keep bindings stable across restarts so clients and tests can rely on addresses.
-```
 
 ### errors.ts
 - Note: this is one of the very rare times a class is appropriate in a functional project.
@@ -505,9 +512,8 @@ export function createContext(config: Config) {
       // emailProvider: createEmailProvider(config),
       // paymentProvider: createPaymentProvider(config),
     },
-    cleanupFunctions,
     async destroy() {
-      for (const cleanup of this.cleanupFunctions) {
+      for (const cleanup of cleanupFunctions) {
         await cleanup();
       }
     },
@@ -631,7 +637,6 @@ export function createServer(context: Context) {
       }
 
       const url = new URL(request.url, `http://${request.headers.host ?? 'localhost'}`);
-
       for (const route of routes) {
         if (request.method !== route.method) continue;
 
@@ -1003,7 +1008,13 @@ export async function handler({ context, body, response }: Handler<typeof schema
 import { IncomingMessage } from 'http';
 import { z } from 'zod/v4';
 import { ValidationError } from '../errors';
-import { ControllerSchema } from '../types';
+
+type BodySchemaSpec = {
+  body: {
+    contentType: string;
+    schema: z.ZodTypeAny;
+  };
+};
 
 export function readBody(request: IncomingMessage) {
   return new Promise<string>((resolve, reject) => {
@@ -1026,7 +1037,7 @@ export function parseJsonSafely(jsonString: string): unknown {
 }
 
 export async function getBodyFromRequest<
-  TSchema extends ControllerSchema & { body: { schema: z.ZodTypeAny } }
+  TSchema extends BodySchemaSpec
 >(request: IncomingMessage, schema: TSchema) {
   if (!request.headers['content-type']?.includes(schema.body.contentType)) {
     throw new ValidationError(`Unsupported content type. Expected ${schema.body.contentType}`);
@@ -1219,8 +1230,6 @@ import { createServer } from '../../src/createServer';
 import { createContext } from '../../src/createContext';
 import { Context } from '../../src/types';
 import http from 'node:http';
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
 import * as schema from '../../src/db/schema';
 
 export function createTestContext() {
