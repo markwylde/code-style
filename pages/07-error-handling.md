@@ -79,10 +79,13 @@ throw new Error('Invalid email');   // 400? 422? ¯\_(ツ)_/¯
 
 ```javascript
 export class AppError extends Error {
+  statusCode: number;
+  code?: string;
+
   constructor(
     message: string,
-    public statusCode: number = 500,
-    public code?: string,
+    statusCode: number = 500,
+    code?: string,
     options?: { cause?: unknown }
   ) {
     // If your runtime supports ErrorOptions (Node 16+/TS lib.es2022.error), use cause
@@ -90,12 +93,17 @@ export class AppError extends Error {
     // @ts-ignore
     super(message, options);
     this.name = 'AppError';
+    this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, public details?: any, options?: { cause?: unknown }) {
+  details?: unknown;
+
+  constructor(message: string, details?: unknown, options?: { cause?: unknown }) {
     super(message, 400, 'VALIDATION_ERROR', options);
+    this.details = details;
   }
 }
 

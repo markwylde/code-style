@@ -24,8 +24,8 @@ const sendgrid = new SendGrid(process.env.SENDGRID_KEY);
 export const emailService = sendgrid;
 
 // userModel.js
-import { db } from './db.js';
-import { emailService } from './emailService.js';
+import { db } from './db.ts';
+import { emailService } from './emailService.ts';
 
 export async function createUser(userData) {
   const user = await db.insert(users).values(userData);
@@ -326,7 +326,7 @@ Mock external services, use real internal ones. Best of both worlds.
 
 ```javascript
 // BAD: Makes context global again
-import { context } from './context.js';
+import { context } from './context.ts';
 
 export async function doSomething() {
   return context.db.query(/* ... */);

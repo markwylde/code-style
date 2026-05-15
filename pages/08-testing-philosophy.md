@@ -410,8 +410,9 @@ const pool = new Pool({
   idleTimeoutMillis: 0  // Keep connections open
 });
 
-// 3. Run database in memory (for CI)
-docker run -d --tmpfs /var/lib/postgresql/data postgres:15
+// 3. Keep owned dependencies in docker-compose.yml
+// CI and local development should start the same postgres service.
+// For ephemeral CI storage, configure the postgres service with tmpfs.
 ```
 
 ## Integration Testing Patterns
@@ -532,7 +533,7 @@ it('should send email to user address', async () => {
 Your CI/CD pipeline has internet. Your development machine has Docker. Run PostgreSQL locally:
 
 ```bash
-docker run -d -p 5432:5432 -e POSTGRES_DB=test postgres:15
+docker compose up --build --watch postgres
 ```
 
 ### "Mocks are more predictable!"

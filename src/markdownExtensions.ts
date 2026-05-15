@@ -7,7 +7,7 @@ import type { Element, HTMLReactParserOptions } from "html-react-parser";
 import { marked, type Tokens } from "marked";
 import { markedHighlight } from "marked-highlight";
 
-interface CalloutToken extends Tokens.Generic {
+type CalloutToken = Tokens.Generic & {
   type: "callout";
   variant:
     | "info"
@@ -19,17 +19,17 @@ interface CalloutToken extends Tokens.Generic {
     | "callout";
   title: string;
   body: string;
-}
+};
 
-interface AccordionToken extends Tokens.Generic {
+type AccordionToken = Tokens.Generic & {
   type: "accordion";
   body: string;
-}
+};
 
-interface AccordionItem {
+type AccordionItem = {
   question: string;
   answerHtml: string;
-}
+};
 
 const CALLOUT_PATTERN =
   /^:::(callout|info|warning|danger|success|tip|caution)(?:[ \t]*\n)?([\s\S]+?)\n:::(?:\n|$)/;
