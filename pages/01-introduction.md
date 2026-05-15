@@ -35,10 +35,15 @@ Typical monorepo layout (workspaces):
 
 ```
 project/
+├── services/
+│   ├── api/        # Runnable Node HTTP service
+│   ├── ui/         # Runnable React app built to static assets
+│   └── admin-ui/   # Optional runnable admin React app
 ├── packages/
-│   ├── api/        # Node HTTP servers, models, controllers
-│   ├── ui/         # React app built to static assets
-│   └── admin-ui/   # Optional admin React app
+│   ├── design-system/ # Shared UI library
+│   └── discovery/     # Shared service-discovery helpers
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json    # npm workspaces
 └── tsconfig.json
 ```
@@ -48,7 +53,8 @@ project/
 - Explicit over implicit: no hidden middleware or globals
 - Functions over classes: single‑purpose exports, first arg is `context`
 - Minimal dependencies: prefer Node built‑ins; adopt libraries intentionally
-- Runtime-first TypeScript: run APIs directly with `node src/main.ts` (no TS->JS bundling step)
+- Runtime-first TypeScript: run services directly with `node src/main.ts`, and use `tsc --noEmit` for type checking
+- Docker-first development: a fresh clone runs with `docker compose up --build --watch`
 - Strong boundaries: controllers ≠ models; services handle external effects
 - Lifecycle guarantees: start only when ready; stop releases all resources
 - Type‑safe I/O: zod for external shapes; clean TS types for internals

@@ -1,6 +1,6 @@
+import net from "node:net";
 import type { AppServer } from "../src/createServer.ts";
 import { createServer } from "../src/createServer.ts";
-import net from "node:net";
 import type { Config } from "../src/types.ts";
 
 export async function createTestServer(

@@ -1,21 +1,16 @@
 {
-  "name": "@code-style/example",
+  "name": "code-style-example",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "services/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "node --env-file=.env.example --env-file-if-exists=.env --watch src/main.ts",
-    "start": "node --env-file=.env.example --env-file-if-exists=.env src/main.ts",
-    "lint": "npm run lint:biome && npm run lint:types",
-    "lint:biome": "biome check .",
-    "lint:types": "tsc -p tsconfig.lint.json --noEmit",
-    "test": "node --test test/**/*.test.ts"
-  },
-  "dependencies": {
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
-    "@types/node": "^24.3.0",
-    "typescript": "^5.9.2"
+    "dev": "npm run dev --workspace=@code-style/example-api",
+    "start": "npm run start --workspace=@code-style/example-api",
+    "lint": "npm run lint --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces"
   }
 }

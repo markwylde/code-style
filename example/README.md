@@ -1,6 +1,6 @@
 # Todo API Example
 
-A working Node.js todo API that follows the code-style spec principles in a minimal single-package example:
+A working Node.js todo API that follows the code-style spec principles in a minimal workspace example:
 
 - Context pattern with explicit dependencies
 - Thin controllers + model-only data logic
@@ -10,18 +10,29 @@ A working Node.js todo API that follows the code-style spec principles in a mini
 - Health/readiness endpoint (`GET /health`)
 - OpenAPI document endpoint (`GET /openapi.json`)
 - Integration tests using the same server factory as production
+- Runnable service code under `services/api`
+- Docker Compose Watch for normal local development
 
-This example is intentionally smaller than the full monorepo structure shown in the main spec. It demonstrates the API architecture and lifecycle patterns without adding workspace/package boilerplate.
+This example is intentionally smaller than the full monorepo structure shown in the main spec: it has one runnable service and no reusable packages yet. It still uses the same service/workspace boundary the spec expects.
 
 ## Quick start
 
 ```bash
 cd example
-npm install
-npm run start
+docker compose up --build --watch
 ```
 
-This example auto-loads `.env.example` by default, and `.env` if present (for local overrides). It runs directly with Node type stripping (`node src/main.ts`), no build step.
+The API will be available at `http://127.0.0.1:4001`.
+
+Docker is the normal local runtime. The API runs directly with Node type stripping (`node src/main.ts`) inside the container, with no build step. Compose Watch syncs source changes into the container and lets Node's `--watch` mode restart the service.
+
+For quick host-side checks, you can still run the workspace scripts directly if you already have Node installed:
+
+```bash
+cd example
+npm install
+npm test
+```
 
 ## Endpoints
 
