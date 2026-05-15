@@ -72,6 +72,8 @@ project/
 │       ├── vite.config.ts
 │       ├── package.json
 │       └── tsconfig.json
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json
 └── tsconfig.json
 ```
@@ -86,8 +88,137 @@ project/
 - Use `type` aliases instead of `interface`. `interface` declaration merging is implicit/global magic and is not allowed.
 - Prefer built in Node functionality over third party libraries.
 - Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
- - UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
+- UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
 - Use npm workspaces to manage the monorepo structure with separate packages for api, ui, and admin-ui.
+
+### Native TypeScript Runtime
+
+- Source code should run on Node's native TypeScript support. Use `tsc --noEmit` for type checking, but do not rely on `ts-node`, `tsx`, transpiled path aliases, or framework-specific runtime transforms.
+- Use only TypeScript syntax that Node can strip safely at runtime.
+- Do not use `enum`, `namespace`, parameter properties, decorators, or other TypeScript features that require code generation.
+- Do not use TypeScript path aliases unless they are also valid runtime import specifiers through package exports or another Node-native mechanism.
+- Prefer string literal unions and `as const` objects instead of `enum`.
+- Declare class fields explicitly instead of using constructor parameter properties.
+
+### Docker Compose Development
+
+- A fresh clone must be runnable on Linux, macOS, and Windows with one command:
+
+```bash
+docker compose up --build --watch
+```
+
+- Every project service belongs in `docker-compose.yml`: API, UI, admin UI, databases, queues, caches, mail test services, object stores, and any other runtime dependency the app owns.
+- Do not require host-installed Node, PostgreSQL, Redis, or other project tooling for normal development. Docker is the only required local runtime.
+- Do not rely on bind-mounted source trees for application code. File watching through bind mounts is inconsistent across host OSes and VM-backed Docker environments.
+- Use Docker Compose Watch (`develop.watch`) for source-built services so Docker observes host-side file changes and syncs, restarts, or rebuilds the container as needed.
+- Use `sync` for source files that the running process can hot-reload or watch inside the container.
+- Use `sync+restart` for configuration or source changes that require restarting the process but not rebuilding the image.
+- Use `rebuild` for dependency or image-shaping files such as `package.json`, `package-lock.json`, and Dockerfiles.
+- After changing `docker-compose.yml` itself, rerun `docker compose up --build --watch` so Compose reloads the service and watch configuration.
+- Never sync `node_modules`, build output, coverage output, `.git`, or OS-specific artifacts into containers. Dependencies are installed inside the image so native packages match the container OS and architecture.
+- Compose Watch rules should use `initial_sync: true` when syncing source directories so the running container begins from the host's current files.
+- App images must include the binaries Compose Watch needs (`stat`, `mkdir`, and `rmdir`) and the container user must be able to write to watched targets.
+- Image-only infrastructure services such as `postgres` still belong in `docker-compose.yml`, but normally do not need watch rules because they have no local source tree.
+
+Example `docker-compose.yml` pattern:
+
+```yaml
+services:
+  api:
+    build:
+      context: .
+      target: api-dev
+    command: npm run dev --workspace=@project/api
+    environment:
+      DATABASE_URL: postgresql://app:app@postgres:5432/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    develop:
+      watch:
+        - action: sync
+          path: ./services/api/src
+          target: /app/services/api/src
+          initial_sync: true
+        - action: sync
+          path: ./services/api/tests
+          target: /app/services/api/tests
+          initial_sync: true
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./services/api/package.json
+        - action: rebuild
+          path: ./Dockerfile
+
+  ui:
+    build:
+      context: .
+      target: ui-dev
+    command: npm run dev --workspace=@project/ui -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    develop:
+      watch:
+        - action: sync
+          path: ./services/ui/src
+          target: /app/services/ui/src
+          initial_sync: true
+          ignore:
+            - node_modules/
+            - dist/
+        - action: sync
+          path: ./services/ui/index.html
+          target: /app/services/ui/index.html
+          initial_sync: true
+        - action: rebuild
+          path: ./services/ui/package.json
+        - action: rebuild
+          path: ./package-lock.json
+
+  admin-ui:
+    build:
+      context: .
+      target: admin-ui-dev
+    command: npm run dev --workspace=@project/admin-ui -- --host 0.0.0.0
+    ports:
+      - "5174:5174"
+    develop:
+      watch:
+        - action: sync
+          path: ./services/admin-ui/src
+          target: /app/services/admin-ui/src
+          initial_sync: true
+          ignore:
+            - node_modules/
+            - dist/
+        - action: sync
+          path: ./services/admin-ui/index.html
+          target: /app/services/admin-ui/index.html
+          initial_sync: true
+        - action: rebuild
+          path: ./services/admin-ui/package.json
+        - action: rebuild
+          path: ./package-lock.json
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
+```
 
 ### Abstraction Discipline
 
@@ -391,19 +522,27 @@ That means we rarely need to try/catch, unless we are trying to catch a specific
 
 ```typescript
 export class AppError extends Error {
+  statusCode: number;
+  code?: string;
+
   constructor(
     message: string,
-    public statusCode: number = 500,
-    public code?: string
+    statusCode: number = 500,
+    code?: string
   ) {
     super(message);
     this.name = 'AppError';
+    this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, public details?: any) {
+  details?: unknown;
+
+  constructor(message: string, details?: unknown) {
     super(message, 400, 'VALIDATION_ERROR');
+    this.details = details;
   }
 }
 
@@ -1360,7 +1499,7 @@ export TEST_MAX_BODY_BYTES="1048576"
 DATABASE_URL=$TEST_DATABASE_URL npm run db:migrate
 ```
 
-### packages/api/tests/helpers/createTestServer.ts
+### services/api/tests/helpers/createTestServer.ts
 ```typescript
 import { createServer } from '../../src/createServer';
 import { createContext } from '../../src/createContext';
@@ -1390,7 +1529,7 @@ export async function cleanupDatabase(context: Context) {
 }
 ```
 
-### packages/api/tests/controllers/users/[userId]/get.test.ts
+### services/api/tests/controllers/users/[userId]/get.test.ts
 ```typescript
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
@@ -1461,7 +1600,7 @@ describe('GET /users/:userId', () => {
 });
 ```
 
-### packages/api/tests/models/users.test.ts
+### services/api/tests/models/users.test.ts
 ```typescript
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
@@ -1721,7 +1860,7 @@ npm test
 npm run test:watch
 
 # Run specific test file
-tsx --test src/models/users.test.ts
+node --test src/models/users.test.ts
 ```
 
 #### Readiness In Tests
@@ -1831,7 +1970,7 @@ Explicit is better than implicit. Functions are better than magic.
 
 ## Database Configuration
 
-### packages/api/drizzle.config.ts
+### services/api/drizzle.config.ts
 ```typescript
 import { defineConfig } from 'drizzle-kit';
 
@@ -1845,7 +1984,7 @@ export default defineConfig({
 });
 ```
 
-### packages/api/src/db/migrate.ts
+### services/api/src/db/migrate.ts
 ```typescript
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -1869,23 +2008,23 @@ async function runMigrations() {
 runMigrations().catch(console.error);
 ```
 
-## TypeScript Compilation Strategy
+## TypeScript Runtime and Typechecking Strategy
 
 ### Applications vs Libraries
 
 **For Node.js Applications:**
 - Don't compile TypeScript to JavaScript
 - Use Node's built-in type stripping to run TypeScript files directly: `node src/main.ts`
+- Use `tsc --noEmit` only for type checking
 - Faster development cycle, no build step needed
 - Simpler deployment (just copy source files)
 - Caveat: all local ESM imports must include the full `.ts` filename (including dynamic imports)
 - DO NOT import with `.js` extension UNLESS the actual source file is `.js` and not `.ts`.
 
 **For Libraries:**
-- Always compile to JavaScript before publishing
-- Avoids TypeScript version conflicts with consuming applications
-- Provides better compatibility across different Node.js environments
-- Include declaration files for TypeScript consumers
+- This guide does not require a JavaScript compilation step for application-owned packages.
+- Keep `tsc` as a type checker unless the package is being published for an external runtime that explicitly requires generated JavaScript artifacts.
+- If a package is published externally, treat the distribution format as a separate packaging decision from this application's runtime strategy.
 
 ### Running Applications
 
@@ -1922,13 +2061,14 @@ import { sendJsonValidated } from "../../../utils/http.ts";
     "dev:all": "npm run dev --workspace=@project/api & npm run dev --workspace=@project/ui & npm run dev --workspace=@project/admin-ui",
     "build:ui": "npm run build --workspace=@project/ui",
     "build:admin": "npm run build --workspace=@project/admin-ui",
+    "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",
     "install": "npm install --workspaces"
   }
 }
 ```
 
-### packages/api/package.json
+### services/api/package.json
 ```json
 {
   "name": "@project/api",
@@ -1937,6 +2077,7 @@ import { sendJsonValidated } from "../../../utils/http.ts";
   "scripts": {
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
+    "typecheck": "tsc --noEmit",
     "test": "node --test tests",
     "db:migrate": "node src/db/migrate.ts",
     "db:generate": "drizzle-kit generate"
@@ -1945,11 +2086,14 @@ import { sendJsonValidated } from "../../../utils/http.ts";
     "drizzle-orm": "^0.29.0",
     "pg": "^8.11.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
   }
 }
 ```
 
-### packages/ui/package.json
+### services/ui/package.json
 ```json
 {
   "name": "@project/ui",
@@ -1958,6 +2102,7 @@ import { sendJsonValidated } from "../../../utils/http.ts";
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -1974,7 +2119,7 @@ import { sendJsonValidated } from "../../../utils/http.ts";
 }
 ```
 
-### packages/admin-ui/package.json
+### services/admin-ui/package.json
 ```json
 {
   "name": "@project/admin-ui",
@@ -1983,6 +2128,7 @@ import { sendJsonValidated } from "../../../utils/http.ts";
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -2003,14 +2149,11 @@ import { sendJsonValidated } from "../../../utils/http.ts";
 ```json
 {
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --noEmit --watch",
     "test": "node --test src",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run typecheck"
   },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": ["dist"],
   "devDependencies": {
     "typescript": "^5.0.0"
   }
