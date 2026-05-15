@@ -9,6 +9,17 @@ This guide describes how to build a functional, minimal dependency Node.js proje
 ```markdown
 project/
 ├── packages/
+│   ├── design-system/
+│   │   ├── src/
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   └── orm/
+│       ├── src/
+│       │   └── index.ts
+│       ├── package.json
+│       └── tsconfig.json
+├── services/
 │   ├── api/
 │   │   ├── src/
 │   │   │   ├── main.ts
@@ -88,8 +99,11 @@ project/
 - Use `type` aliases instead of `interface`. `interface` declaration merging is implicit/global magic and is not allowed.
 - Prefer built in Node functionality over third party libraries.
 - Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
-- UI packages (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
-- Use npm workspaces to manage the monorepo structure with separate packages for api, ui, and admin-ui.
+- Top-level `services/` contains runnable services: API servers, web apps, workers, admin apps, and any process that can be started, deployed, exposed on a port, or owned by Docker Compose.
+- Top-level `packages/` contains reusable libraries imported by services: shared design systems, ORM/database helpers, SDKs, typed clients, or other abstracted ES module libraries.
+- Packages must be independent Node libraries with explicit public exports. They should not own ports, processes, Docker services, environment loading, deployment config, or service-specific runtime side effects.
+- UI services (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
+- Use npm workspaces to manage both `services/*` and `packages/*`.
 
 ### Native TypeScript Runtime
 
@@ -1739,7 +1753,7 @@ Use the simplest reliable building block for cross-cutting concerns (events, cac
 ### 2b. Packaging Guidelines (Monorepo)
 Decide where code lives based on scope and responsibility.
 
-- Keep small, pure utilities in `utils/` within the app/package that uses them.
+- Keep small, pure utilities in `utils/` within the service or package that uses them.
 - Promote larger “service patterns” (cache, rate limiter, event bus) to their own workspace package under `packages/<name>` when they grow beyond trivial use. This keeps boundaries clean and enables extraction.
 - Avoid catch-all umbrella packages (e.g., `@CompanyLtdUtilLibrary`). Create narrowly scoped packages with clear, focused APIs.
 
@@ -2022,7 +2036,8 @@ runMigrations().catch(console.error);
 - DO NOT import with `.js` extension UNLESS the actual source file is `.js` and not `.ts`.
 
 **For Libraries:**
-- This guide does not require a JavaScript compilation step for application-owned packages.
+- Internal packages under `packages/` should be importable ES module libraries with explicit exports.
+- This guide does not require a JavaScript compilation step for internal, application-owned packages.
 - Keep `tsc` as a type checker unless the package is being published for an external runtime that explicitly requires generated JavaScript artifacts.
 - If a package is published externally, treat the distribution format as a separate packaging decision from this application's runtime strategy.
 
@@ -2052,6 +2067,7 @@ import { sendJsonValidated } from "../../../utils/http.ts";
   "name": "project-root",
   "private": true,
   "workspaces": [
+    "services/*",
     "packages/*"
   ],
   "scripts": {
