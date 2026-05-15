@@ -10,73 +10,63 @@ export default function AboutPage(): JSX.Element {
       <div className="callout callout-info">
         <strong>A Philosophy, Not a Framework</strong>
         <p>
-          This guide explains the reasoning behind building functional Node.js
-          applications without frameworks, using simple patterns that prioritize
-          maintainability, debuggability, and understanding.
+          This guide turns the spec into a readable architecture: first the
+          whole system, then the runtime flow, then the rules that keep each
+          layer honest.
         </p>
       </div>
 
       <h3>What This Guide Covers</h3>
       <ul>
         <li>
-          <strong>Why</strong> we avoid frameworks and prefer explicit
-          dependencies
+          <strong>Understand The System</strong>: the mental model, project
+          shape, and runtime flow
         </li>
         <li>
-          <strong>How</strong> the context pattern replaces dependency injection
+          <strong>Build The Core</strong>: context, server lifecycle, routing,
+          controllers, models, services, and schemas
         </li>
         <li>
-          <strong>Why</strong> proper server lifecycle prevents production
-          disasters
+          <strong>Operate With Discipline</strong>: error contracts, real-system
+          tests, and the Docker development loop
         </li>
         <li>
-          <strong>How</strong> true separation of concerns makes code
-          maintainable
-        </li>
-        <li>
-          <strong>Why</strong> letting errors bubble creates better systems
-        </li>
-        <li>
-          <strong>When</strong> to mock external services vs use real
-          dependencies
-        </li>
-        <li>
-          <strong>Why</strong> every npm package is a liability
-        </li>
-        <li>
-          <strong>How</strong> to compose complex systems from simple functions
+          <strong>Make Good Decisions</strong>: dependency discipline,
+          abstraction discipline, and practical patterns
         </li>
       </ul>
 
       <h3>The Core Philosophy</h3>
       <div className="callout callout-success">
-        <strong>Simple &gt; Complex</strong>
+        <strong>Traceable &gt; Magical</strong>
         <p>
-          Every decision in this architecture follows one principle: prefer
-          simple, explicit, understandable code over complex abstractions that
-          promise convenience.
+          Every decision in this architecture should make the common path easier
+          to trace: startup, request handling, data access, error translation,
+          testing, and shutdown.
         </p>
       </div>
 
       <h4>Key Principles</h4>
       <ol>
         <li>
-          <strong>No Magic</strong> – Everything is explicit and visible
+          <strong>Explicit Dependencies</strong> – Context is built once and
+          passed into functions that need it
         </li>
         <li>
-          <strong>Pure Functions</strong> – Same input, same output, no
-          surprises
+          <strong>Clear Boundaries</strong> – Controllers adapt HTTP; models own
+          data rules; services own external effects
         </li>
         <li>
-          <strong>Composition</strong> – Build complex behavior from simple
-          parts
+          <strong>Managed Lifecycle</strong> – Servers start only when ready and
+          stop only when resources are released
         </li>
         <li>
-          <strong>Real Testing</strong> – Use real databases, mock external
-          services
+          <strong>Real Testing</strong> – Use real dependencies the project owns
+          and mock only true third-party systems
         </li>
         <li>
-          <strong>Minimal Dependencies</strong> – Every package is a liability
+          <strong>Conservative Abstraction</strong> – Extract helpers and
+          packages only when they reduce the reader's work
         </li>
       </ol>
 
@@ -91,28 +81,23 @@ export default function AboutPage(): JSX.Element {
       <h3>How to Use This Guide</h3>
       <ol>
         <li>
-          Start with <strong>Introduction</strong> to understand the problem
+          Start with <strong>Architecture At A Glance</strong> to get the map
         </li>
         <li>
-          Learn the <strong>Context Pattern</strong> for dependency management
+          Read <strong>Project Shape</strong> and <strong>Runtime Flow</strong>{" "}
+          before diving into implementation details
         </li>
         <li>
-          Master <strong>Server Lifecycle</strong> for production reliability
+          Work through <strong>Build The Core</strong> in order: context,
+          lifecycle, routing, controllers, models, services, and schemas
         </li>
         <li>
-          Understand <strong>Models vs Controllers</strong> separation
+          Use <strong>Operate With Discipline</strong> before tightening tests,
+          errors, or local Docker behavior
         </li>
         <li>
-          Embrace <strong>Error Handling</strong> that bubbles up
-        </li>
-        <li>
-          Apply the <strong>Testing Philosophy</strong> of real dependencies
-        </li>
-        <li>
-          Practice <strong>Dependency Discipline</strong>
-        </li>
-        <li>
-          Use <strong>Practical Patterns</strong> for composition
+          Finish with <strong>Make Good Decisions</strong> when choosing
+          dependencies, helpers, packages, and repeated patterns
         </li>
       </ol>
 

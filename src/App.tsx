@@ -17,7 +17,15 @@ type Page = {
   title: string;
   tagline: string;
   order: number;
+  group: string;
+  groupOrder: number;
   body: string;
+};
+
+type GuideGroup = {
+  title: string;
+  order: number;
+  pages: Page[];
 };
 
 type Section = "guide" | "about" | "spec";
@@ -31,6 +39,13 @@ type SpecMode = "friendly" | "markdown";
 type Theme = "light" | "dark";
 
 const THEME_STORAGE_KEY = "codestyle-theme";
+
+const GUIDE_GROUP_DEFINITIONS = [
+  { title: "Understand The System", order: 1, from: 1, to: 3 },
+  { title: "Build The Core", order: 2, from: 4, to: 7 },
+  { title: "Operate With Discipline", order: 3, from: 8, to: 10 },
+  { title: "Make Good Decisions", order: 4, from: 11, to: 13 },
+] as const;
 
 const markdownModules = import.meta.glob("../pages/*.md", {
   eager: true,
@@ -86,16 +101,73 @@ function loadPages(): Page[] {
       const orderValue = meta.order;
       const order =
         typeof orderValue === "number" ? orderValue : Number.MAX_SAFE_INTEGER;
+      const { group, groupOrder } = resolvePageGroup(meta, order);
 
       return {
         id,
         title,
         tagline,
         order,
+        group,
+        groupOrder,
         body,
       };
     })
     .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+}
+
+function resolvePageGroup(
+  meta: Record<string, string | number>,
+  order: number,
+): { group: string; groupOrder: number } {
+  const frontmatterGroup =
+    typeof meta.group === "string" && meta.group.trim()
+      ? meta.group.trim()
+      : undefined;
+  const defaultDefinition =
+    GUIDE_GROUP_DEFINITIONS.find(
+      (definition) => order >= definition.from && order <= definition.to,
+    ) || GUIDE_GROUP_DEFINITIONS[GUIDE_GROUP_DEFINITIONS.length - 1];
+  const group = frontmatterGroup || defaultDefinition.title;
+  const knownDefinition = GUIDE_GROUP_DEFINITIONS.find(
+    (definition) =>
+      normalizeGroupTitle(definition.title) === normalizeGroupTitle(group),
+  );
+  const groupOrderValue = meta.groupOrder;
+  const groupOrder =
+    typeof groupOrderValue === "number"
+      ? groupOrderValue
+      : knownDefinition?.order || defaultDefinition.order;
+
+  return { group, groupOrder };
+}
+
+function normalizeGroupTitle(title: string): string {
+  return title.trim().toLocaleLowerCase();
+}
+
+function groupPages(pages: Page[]): GuideGroup[] {
+  const groups = new Map<string, GuideGroup>();
+
+  pages.forEach((page) => {
+    const key = normalizeGroupTitle(page.group);
+    const existingGroup = groups.get(key);
+    if (existingGroup) {
+      existingGroup.pages.push(page);
+      existingGroup.order = Math.min(existingGroup.order, page.groupOrder);
+      return;
+    }
+
+    groups.set(key, {
+      title: page.group,
+      order: page.groupOrder,
+      pages: [page],
+    });
+  });
+
+  return Array.from(groups.values()).sort(
+    (a, b) => a.order - b.order || a.title.localeCompare(b.title),
+  );
 }
 
 type Frontmatter = {
@@ -224,6 +296,7 @@ function splitIntroFromContent(html: string): {
 
 export default function App(): JSX.Element {
   const pages = useMemo(() => loadPages(), []);
+  const guideGroups = useMemo(() => groupPages(pages), [pages]);
   const [{ theme, hasExplicit }, setThemeInfo] = useState(resolveInitialTheme);
   const [view, setView] = useState<ViewState>(() =>
     parseHash(window.location.hash, pages),
@@ -437,6 +510,7 @@ export default function App(): JSX.Element {
   const specArticleId = useId();
   const navListId = useId();
   const guideNavTitleId = useId();
+  const guideNavSheetId = useId();
 
   const handleCopySpecMarkdown = async () => {
     try {
@@ -458,23 +532,40 @@ export default function App(): JSX.Element {
         ? "spec-copy error"
         : "spec-copy";
 
-  const renderGuideNavItems = (afterSelect?: () => void) =>
-    pages.map((page, index) => {
-      const isActive = page.id === activePage?.id;
-      const label = `${String(index + 1).padStart(2, "0")}. ${page.title}`;
-      return (
-        <li key={page.id}>
-          <a
-            href={`#guide/${page.id}`}
-            className={isActive ? "active" : ""}
-            aria-current={isActive ? "page" : undefined}
-            onClick={() => afterSelect?.()}
-          >
-            {label}
-          </a>
-        </li>
-      );
-    });
+  const renderGuideNavGroups = (afterSelect?: () => void) =>
+    guideGroups.map((group) => (
+      <li className="nav-group" key={group.title}>
+        <div className="nav-group-title">{group.title}</div>
+        <ol className="nav-group-list">
+          {group.pages.map((page) => {
+            const isActive = page.id === activePage?.id;
+            const pageIndex = pages.findIndex(
+              (candidate) => candidate.id === page.id,
+            );
+            const displayOrder =
+              Number.isSafeInteger(page.order) &&
+              page.order !== Number.MAX_SAFE_INTEGER
+                ? page.order
+                : pageIndex + 1;
+            return (
+              <li key={page.id}>
+                <a
+                  href={`#guide/${page.id}`}
+                  className={isActive ? "active" : ""}
+                  aria-current={isActive ? "page" : undefined}
+                  onClick={() => afterSelect?.()}
+                >
+                  <span className="nav-item-number">
+                    {String(displayOrder).padStart(2, "0")}.
+                  </span>
+                  <span className="nav-item-title">{page.title}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ol>
+      </li>
+    ));
 
   if (view.section === "guide" && !activePage) {
     return (
@@ -564,15 +655,25 @@ export default function App(): JSX.Element {
             <button
               type="button"
               className="guide-nav-toggle"
+              aria-controls={guideNavSheetId}
+              aria-expanded={isGuideNavOpen}
               onClick={() => setGuideNavOpen(true)}
             >
-              Chapters
+              <span className="guide-nav-toggle-text">
+                <span className="guide-nav-toggle-kicker">Contents</span>
+                <span className="guide-nav-toggle-title">
+                  {activePage.title}
+                </span>
+              </span>
+              <span className="guide-nav-toggle-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation">
+                  <path d="M4 7h16v2H4V7Zm0 4h16v2H4v-2Zm0 4h10v2H4v-2Z" />
+                </svg>
+              </span>
             </button>
-            <nav>
-              <h2>Chapters</h2>
-              <ul className="nav-list" id={navListId}>
-                {renderGuideNavItems()}
-              </ul>
+            <nav aria-labelledby={navListId}>
+              <h2 id={navListId}>Chapters</h2>
+              <ul className="nav-list">{renderGuideNavGroups()}</ul>
             </nav>
             <article id={guideArticleId} className="page-container">
               {activePage.tagline ? (
@@ -650,9 +751,12 @@ export default function App(): JSX.Element {
           aria-labelledby={guideNavTitleId}
           aria-hidden={isGuideNavOpen ? undefined : true}
         >
-          <div className="guide-nav-sheet">
+          <div className="guide-nav-sheet" id={guideNavSheetId}>
             <div className="guide-nav-sheet-header">
-              <h2 id={guideNavTitleId}>Chapter</h2>
+              <div>
+                <div className="guide-nav-sheet-kicker">Guide</div>
+                <h2 id={guideNavTitleId}>Contents</h2>
+              </div>
               <button
                 type="button"
                 className="guide-nav-close"
@@ -666,7 +770,7 @@ export default function App(): JSX.Element {
             </div>
             <div className="guide-nav-sheet-body">
               <ul className="nav-list">
-                {renderGuideNavItems(() => setGuideNavOpen(false))}
+                {renderGuideNavGroups(() => setGuideNavOpen(false))}
               </ul>
             </div>
           </div>

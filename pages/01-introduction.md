@@ -1,98 +1,156 @@
 ---
-title: "Introduction"
-tagline: "A practical, framework‑free Node.js blueprint"
-subtitle: "Build clear, testable systems with the context pattern"
+title: "Architecture At A Glance"
+tagline: "The whole system in one mental model"
+subtitle: "Services run. Packages share. Context connects."
 date: "2025-04-03"
 category: "Introduction"
 tags: ["functional", "nodejs", "architecture", "monorepo"]
 order: 1
 ---
 
-## What This Is
+This guide is about one architectural move: build Node.js systems from explicit functions instead of framework magic.
 
-This guide is a walkthrough for building production‑grade Node.js systems without a heavyweight framework. It shows how to structure an application as a set of small, focused functions that all take an explicit context object, keeping dependencies clear and testing easy. You get strong lifecycle guarantees, type‑safe boundaries, and minimal magic.
+The project still has all the familiar production pieces: HTTP servers, routes, controllers, models, schemas, config, tests, Docker, React UIs, shared packages, and external services. The difference is that each piece has a narrow job, and dependencies travel through one plain object: `context`.
 
-Instead of wiring a pile of middleware and hoping for the best, you’ll learn a consistent approach that scales: a portable server lifecycle, thin HTTP controllers, model‑centric data logic, and explicit external services, all stitched together through a typed context.
+## The Map
 
-## Who It’s For
+Think of the application as a set of concentric boundaries:
 
-- Engineers who prefer clarity over convention and want control of their stack
-- Teams migrating from framework‑driven apps to a leaner, testable architecture
-- Builders of HTTP APIs and React UIs that value portability and reliability
+```text
+process
+  main.ts
+    load config
+    create server
+    start and stop the app
 
-## What You’ll Build
+service runtime
+  createServer.ts
+    create context
+    create Node HTTP server
+    attach routes
+    own lifecycle
 
-A small but complete architecture with a clear separation of concerns:
+request boundary
+  routes.ts
+  controllers/
+    match method and path
+    parse HTTP input
+    validate external shapes
+    call application functions
+    write HTTP output
 
-- Context: the single, explicit object that holds dependencies (db, config, services)
-- Server: portable HTTP servers with start/stop/restart and health checks
-- Controllers: thin HTTP adapters that validate, authorize, and call models
-- Models: domain + data access (Drizzle ORM), free of HTTP concerns
-- Services: integrations and cross‑boundary side effects (email, payments)
-- UI: React + TypeScript + CSS Modules compiled to static assets
+application core
+  models/
+  services/
+    enforce rules
+    read and write data
+    call external providers through context
 
-Typical monorepo layout (workspaces):
-
+shared resources
+  createContext.ts
+    config
+    database clients
+    provider clients
+    lifecycle state
+    cleanup
 ```
-project/
-├── services/
-│   ├── api/        # Runnable Node HTTP service
-│   ├── ui/         # Runnable React app built to static assets
-│   └── admin-ui/   # Optional runnable admin React app
-├── packages/
-│   ├── design-system/ # Shared UI library
-│   └── discovery/     # Shared service-discovery helpers
-├── Dockerfile
-├── docker-compose.yml
-├── package.json    # npm workspaces
-└── tsconfig.json
-```
 
-## Core Principles
+Nothing outside the boundary should know more than it needs. `main.ts` does not know how a todo is created. A model does not know what an HTTP header is. A controller does not create database pools. Context holds resources so functions can stay honest about what they use.
 
-- Explicit over implicit: no hidden middleware or globals
-- Functions over classes: single‑purpose exports, first arg is `context`
-- Minimal dependencies: prefer Node built‑ins; adopt libraries intentionally
-- Runtime-first TypeScript: run services directly with `node src/main.ts`, and use `tsc --noEmit` for type checking
-- Docker-first development: a fresh clone runs with `docker compose up --build --watch`
-- Strong boundaries: controllers ≠ models; services handle external effects
-- Lifecycle guarantees: start only when ready; stop releases all resources
-- Type‑safe I/O: zod for external shapes; clean TS types for internals
-- ESM caveat: local imports use full `.ts` filenames (for example `import { x } from "./x.ts"`)
-- Test the real system: use a real DB; only mock true third‑party services
+## The Three Rules
 
-## How It Fits Together
+### 1. Services Own Runtime
 
-```ts
-// Controller (HTTP layer)
-export async function postUsersController(context, request, response) {
-  const body = await readBody(request, context.config.maxBodyBytes);
-  const data = CreateUserSchema.parse(JSON.parse(body));
-  const user = await createUser(context, data); // model
-  response.statusCode = 201;
-  response.end(JSON.stringify(user));
+A top-level `services/` directory contains runnable things: API servers, web apps, workers, admin apps, and any process that can be started, deployed, exposed on a port, or managed by Docker Compose.
+
+If it has a `main.ts`, listens on a port, loads environment config, serves static files, runs a queue worker, or belongs in `docker-compose.yml`, it is a service.
+
+### 2. Packages Own Reuse
+
+A top-level `packages/` directory contains reusable ES module libraries imported by services: design systems, service discovery helpers, typed clients, feature flag libraries, SDKs, and other shared code.
+
+Packages do not own ports, Docker services, environment loading, or service-specific side effects. They expose useful modules; services decide when and how to run.
+
+### 3. Context Owns Dependencies
+
+Application functions receive `context` rather than importing singletons:
+
+```typescript
+export async function createTodo(
+  context: Context,
+  input: CreateTodoInput,
+): Promise<Todo> {
+  const existing = context.db.todos
+    .getAll()
+    .find((todo) => todo.title.toLowerCase() === input.title.toLowerCase());
+
+  if (existing) {
+    throw new ConflictError("Todo title must be unique");
+  }
+
+  const todo = {
+    id: randomUUID(),
+    title: input.title,
+    completed: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  context.db.todos.insert(todo);
+  return todo;
 }
-
-// Model (data + business rules)
-export async function createUser(context, data) {
-  const [row] = await context.db.insert(users).values(data).returning();
-  return toApiUser(row);
-}
 ```
 
-- Controllers parse/validate inputs, enforce auth, call models/services, and shape HTTP responses.
-- Models own queries, rules, and data transformations. No HTTP concerns.
-- Context owns resources (db pools, config, providers) and cleans them up on stop.
-- Servers expose a readiness endpoint and implement `start()`, `stop()`, `restart()`.
+This keeps dependencies visible. It also makes tests simpler: create a test context, call the real function, and mock only external systems the project does not own.
 
-## Why Not a Framework?
+## Layer Responsibilities
 
-Frameworks promise convenience but trade away visibility and control. Middleware mutates shared objects, magic hides flow, and upgrades become risky. Here, every step is explicit and testable. When something breaks, you debug your code, not a stack of plugins.
+| Layer | Owns | Does Not Own |
+| --- | --- | --- |
+| `main.ts` | process startup, signal handlers, fatal error logging | request handling or business rules |
+| `createServer.ts` | Node HTTP server, routes, lifecycle, readiness | model logic or environment parsing details |
+| `createContext.ts` | resources, config, providers, cleanup | HTTP parsing or route matching |
+| `routes.ts` | method/path declarations and controller modules | controller behavior |
+| `controllers/` | HTTP input/output, auth checks, schema parsing | database details or reusable business rules |
+| `models/` | domain rules, queries, data transformations | HTTP request/response objects |
+| `services/` inside a service | external effects such as email, payments, storage | hidden globals |
+| `packages/` | reusable libraries with explicit exports | service runtime side effects |
 
-See: `Why Functional Node.js?` for the cost of magic and the benefits of clarity.
+The table is the mental guardrail. When a file starts doing work from another row, the architecture is drifting.
 
-## What This Is Not
+## The Request Story
 
-- Not a DI container or annotation framework
-- Not server‑side rendering — React UIs are compiled to static assets
-- Not a one‑size‑fits‑all toolkit — it’s a set of composable patterns
+A request should be easy to narrate:
+
+1. Node receives an HTTP request.
+2. The router finds one explicit route.
+3. The controller reads request data and validates external shapes.
+4. The controller calls a model or service with `context`.
+5. The model enforces application rules and uses resources from `context`.
+6. The controller serializes the response.
+7. Unexpected errors bubble to one HTTP error boundary.
+
+There is no hidden middleware chain mutating the request. There is no decorator system registering behavior elsewhere. There is no dependency injection container to inspect. The flow is just files and function calls.
+
+## What To Optimize For
+
+:::tip
+**The North Star**
+
+Optimize for code a new teammate can trace in one sitting. The architecture should make the common path obvious and the unusual path explicit.
+:::
+
+- Prefer built-in Node functionality before adding dependencies.
+- Use TypeScript types for internal contracts and schemas for external input/output.
+- Use `type` aliases instead of `interface`.
+- Run source on Node's native TypeScript support; avoid features that require code generation.
+- Keep local imports runtime-valid, including full `.ts` filenames.
+- Keep comments rare and focused on why a surprising choice exists.
+- Abstract only after the pattern is stable or the extraction clearly lowers cognitive load.
+- Use Docker Compose as the normal development runtime so a fresh clone starts with one command.
+
+## What Comes Next
+
+`Project Shape` explains where files go and why.
+
+`Runtime Flow` follows the app from process startup through request handling, error handling, and shutdown.
