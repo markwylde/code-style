@@ -14,7 +14,7 @@ project/
 │   │   │   └── index.ts
 │   │   ├── package.json
 │   │   └── tsconfig.json
-│   └── orm/
+│   └── discovery/
 │       ├── src/
 │       │   └── index.ts
 │       ├── package.json
@@ -100,7 +100,7 @@ project/
 - Prefer built in Node functionality over third party libraries.
 - Only mock external systems, not the internal ones this project needs. For example, don't mock our postgres database, use a real one in the tests. But it would be okay to mock the Twilio API, it's a third party.
 - Top-level `services/` contains runnable services: API servers, web apps, workers, admin apps, and any process that can be started, deployed, exposed on a port, or owned by Docker Compose.
-- Top-level `packages/` contains reusable libraries imported by services: shared design systems, ORM/database helpers, SDKs, typed clients, or other abstracted ES module libraries.
+- Top-level `packages/` contains reusable libraries imported by services: shared design systems, service discovery, feature flags, SDKs, typed clients, or other abstracted ES module libraries.
 - Packages must be independent Node libraries with explicit public exports. They should not own ports, processes, Docker services, environment loading, deployment config, or service-specific runtime side effects.
 - UI services (ui and admin-ui) are built with React + TypeScript + CSS Modules and compiled to static assets served by the Node HTTP server. Do not introduce server-side rendering frameworks.
 - Use npm workspaces to manage both `services/*` and `packages/*`.
@@ -129,6 +129,7 @@ docker compose up --build --watch
 - Use `sync` for source files that the running process can hot-reload or watch inside the container.
 - Use `sync+restart` for configuration or source changes that require restarting the process but not rebuilding the image.
 - Use `rebuild` for dependency or image-shaping files such as `package.json`, `package-lock.json`, and Dockerfiles.
+- When a service imports an internal package from `packages/`, sync that package's source into the service container and rebuild when its `package.json` changes.
 - After changing `docker-compose.yml` itself, rerun `docker compose up --build --watch` so Compose reloads the service and watch configuration.
 - Never sync `node_modules`, build output, coverage output, `.git`, or OS-specific artifacts into containers. Dependencies are installed inside the image so native packages match the container OS and architecture.
 - Compose Watch rules should use `initial_sync: true` when syncing source directories so the running container begins from the host's current files.
@@ -160,12 +161,18 @@ services:
           path: ./services/api/tests
           target: /app/services/api/tests
           initial_sync: true
+        - action: sync
+          path: ./packages/discovery/src
+          target: /app/packages/discovery/src
+          initial_sync: true
         - action: rebuild
           path: ./package.json
         - action: rebuild
           path: ./package-lock.json
         - action: rebuild
           path: ./services/api/package.json
+        - action: rebuild
+          path: ./packages/discovery/package.json
         - action: rebuild
           path: ./Dockerfile
 
@@ -189,8 +196,14 @@ services:
           path: ./services/ui/index.html
           target: /app/services/ui/index.html
           initial_sync: true
+        - action: sync
+          path: ./packages/design-system/src
+          target: /app/packages/design-system/src
+          initial_sync: true
         - action: rebuild
           path: ./services/ui/package.json
+        - action: rebuild
+          path: ./packages/design-system/package.json
         - action: rebuild
           path: ./package-lock.json
 
@@ -214,8 +227,14 @@ services:
           path: ./services/admin-ui/index.html
           target: /app/services/admin-ui/index.html
           initial_sync: true
+        - action: sync
+          path: ./packages/design-system/src
+          target: /app/packages/design-system/src
+          initial_sync: true
         - action: rebuild
           path: ./services/admin-ui/package.json
+        - action: rebuild
+          path: ./packages/design-system/package.json
         - action: rebuild
           path: ./package-lock.json
 
